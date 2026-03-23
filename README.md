@@ -2,7 +2,7 @@
 
 End-to-end encryption for [Venice AI](https://venice.ai)'s TEE-backed inference. Prompts are encrypted in the client and only decrypted inside AMD SEV-SNP Trusted Execution Environments — Venice never sees plaintext.
 
-> **Disclaimer:** Vibecoded. They say don't roll your own crypto — we vibecoded ours. Use at your own risk.
+> **Disclaimer:** Vibecoded. They say don't roll your own crypto — I vibecoded mine. Use at your own risk.
 
 **Protocol:** ECDH (secp256k1) key exchange → HKDF-SHA256 key derivation → AES-256-GCM encryption
 
