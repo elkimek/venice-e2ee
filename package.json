@@ -1,0 +1,40 @@
+{
+  "name": "venice-e2ee",
+  "version": "0.1.0",
+  "description": "End-to-end encryption for Venice AI's TEE-backed inference",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "build:browser": "esbuild src/index.ts --bundle --format=esm --outfile=dist/venice-e2ee.browser.js --target=es2022",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@noble/secp256k1": "^2.1.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.27.4",
+    "typescript": "^5.4.0",
+    "vitest": "^2.0.0"
+  },
+  "license": "MIT",
+  "keywords": [
+    "venice",
+    "e2ee",
+    "encryption",
+    "tee",
+    "secp256k1",
+    "aes-gcm"
+  ]
+}
