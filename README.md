@@ -120,6 +120,16 @@ Client                              Venice TEE (AMD SEV-SNP)
 
 Each response chunk uses a fresh server ephemeral key, so every chunk requires its own ECDH key derivation.
 
+## Security notice
+
+This library encrypts and decrypts messages using the public key returned by Venice's TEE attestation endpoint. However, it does **not** currently verify the AMD SEV-SNP attestation report. This means:
+
+- The attestation report signature is not validated against AMD's root of trust
+- The TEE code measurement is not checked against Venice's published values
+- The nonce sent to the attestation endpoint is not verified in the response
+
+In practice, this trusts that the Venice API returns a legitimate TEE public key. Full attestation verification is planned for a future release.
+
 ## Development
 
 ```bash

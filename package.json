@@ -28,6 +28,14 @@
     "typescript": "^5.4.0",
     "vitest": "^2.0.0"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/elkimek/venice-e2ee.git"
+  },
+  "bugs": {
+    "url": "https://github.com/elkimek/venice-e2ee/issues"
+  },
+  "homepage": "https://github.com/elkimek/venice-e2ee#readme",
   "license": "GPL-3.0-only",
   "keywords": [
     "venice",

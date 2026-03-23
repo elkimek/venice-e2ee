@@ -102,7 +102,10 @@ export function createVeniceE2EE(options: VeniceE2EEOptions) {
   }
 
   function clearSession(): void {
-    _session = null;
+    if (_session) {
+      _session.privateKey.fill(0);
+      _session = null;
+    }
   }
 
   return {
