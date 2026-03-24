@@ -1,6 +1,6 @@
 # venice-e2ee
 
-End-to-end encryption for [Venice AI](https://venice.ai)'s TEE-backed inference. Prompts are encrypted in the client and only decrypted inside AMD SEV-SNP Trusted Execution Environments — Venice never sees plaintext.
+End-to-end encryption for [Venice AI](https://venice.ai)'s TEE-backed inference. Prompts are encrypted client-side and only decrypted inside Intel TDX Trusted Execution Environments — Venice never sees plaintext.
 
 > **Disclaimer:** Vibecoded. They say don't roll your own crypto — I vibecoded mine. Use at your own risk.
 
@@ -27,8 +27,12 @@ import { createVeniceE2EE } from 'venice-e2ee';
 
 const e2ee = createVeniceE2EE({ apiKey: 'your-venice-api-key' });
 
-// Create session (fetches TEE attestation, ECDH key exchange)
+// Create session (fetches TEE attestation, verifies quote, ECDH key exchange)
 const session = await e2ee.createSession('e2ee-qwen3-5-122b-a10b');
+
+// Inspect attestation result
+console.log(session.attestation);
+// { nonceVerified: true, signingKeyBound: true, debugMode: false, serverTdxValid: true, errors: [] }
 
 // Encrypt messages
 const { encryptedMessages, headers, veniceParameters } = await e2ee.encrypt(
@@ -58,21 +62,60 @@ for await (const chunk of e2ee.decryptStream(response.body, session)) {
 
 ### `createVeniceE2EE(options)`
 
-Creates an E2EE instance with session caching.
+Creates an E2EE instance with session caching and attestation verification.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `apiKey` | `string` | required | Venice API key |
 | `baseUrl` | `string` | `https://api.venice.ai` | API base URL |
 | `sessionTTL` | `number` | `1800000` (30 min) | Session cache TTL in ms |
+| `verifyAttestation` | `boolean` | `true` | Verify TEE attestation on session creation |
+| `dcapVerifier` | `DcapVerifier` | — | Optional full DCAP verifier (see below) |
 
 Returns an object with:
 
-- **`createSession(modelId)`** — Generates ephemeral keypair, fetches TEE attestation, derives AES key. Returns an `E2EESession`. Sessions are cached per model with a 30-minute TTL.
+- **`createSession(modelId)`** — Generates ephemeral keypair, fetches TEE attestation, verifies the TDX quote, derives AES key. Returns an `E2EESession` with attestation results. Throws if verification fails. Sessions are cached per model with a 30-minute TTL.
 - **`encrypt(messages, session)`** — Encrypts an array of `{role, content}` messages. Returns `{ encryptedMessages, headers, veniceParameters }`.
 - **`decryptChunk(hexChunk, session)`** — Decrypts a single response chunk (hex-encoded ciphertext with embedded server ephemeral key).
 - **`decryptStream(body, session)`** — Async generator that parses an SSE stream and yields decrypted text chunks. Handles per-chunk ephemeral keys, plaintext passthrough, and `[DONE]` sentinel.
-- **`clearSession()`** — Clears the cached session.
+- **`clearSession()`** — Zeroizes the private key and clears the cached session.
+
+## Attestation verification
+
+Every `createSession` call fetches a TDX attestation quote from Venice and verifies it client-side:
+
+1. **Nonce binding** — confirms the client nonce appears in REPORTDATA (raw or SHA-256)
+2. **Signing key binding** — confirms the signing key's Ethereum address matches REPORTDATA
+3. **Debug mode rejection** — rejects TEEs running in debug mode
+4. **Server cross-check** — flags inconsistencies with Venice's own verification results
+
+If any check fails, `createSession` throws with a descriptive error. The attestation result is available on `session.attestation`.
+
+To disable verification (not recommended):
+
+```js
+const e2ee = createVeniceE2EE({ apiKey, verifyAttestation: false });
+```
+
+### Full DCAP verification (optional)
+
+For full TDX DCAP verification (PCK cert chain, quote signatures, TCB evaluation), install the optional peer dependency and inject the verifier:
+
+```bash
+npm install @phala/dcap-qvl
+```
+
+```js
+import { createVeniceE2EE } from 'venice-e2ee';
+import { createDcapVerifier } from 'venice-e2ee/dcap';
+
+const e2ee = createVeniceE2EE({
+  apiKey: 'your-venice-api-key',
+  dcapVerifier: createDcapVerifier(), // uses Phala PCCS by default
+});
+```
+
+This adds ~500KB to browser bundles. For most use cases, the default binding checks + server cross-check are sufficient.
 
 ### `isE2EEModel(modelId)`
 
@@ -80,15 +123,17 @@ Returns `true` if the model ID starts with `e2ee-`.
 
 ### Low-level exports
 
-For custom integrations, the individual crypto primitives are also exported:
+For custom integrations, the individual crypto and attestation primitives are also exported:
 
 ```js
 import {
-  generateKeypair,    // secp256k1 ephemeral keypair
-  deriveAESKey,       // ECDH shared secret → HKDF → AES-256-GCM key
-  encryptMessage,     // AES-GCM encrypt → hex(pubkey + nonce + ciphertext)
-  decryptChunk,       // per-chunk ECDH + AES-GCM decrypt
-  decryptSSEStream,   // SSE parser + decryption async generator
+  generateKeypair,      // secp256k1 ephemeral keypair
+  deriveAESKey,         // ECDH shared secret → HKDF → AES-256-GCM key
+  encryptMessage,       // AES-GCM encrypt → hex(pubkey + nonce + ciphertext)
+  decryptChunk,         // per-chunk ECDH + AES-GCM decrypt
+  decryptSSEStream,     // SSE parser + decryption async generator
+  verifyAttestation,    // run attestation checks on a raw response
+  deriveEthAddress,     // secp256k1 pubkey → Ethereum address
   toHex,
   fromHex,
 } from 'venice-e2ee';
@@ -97,13 +142,18 @@ import {
 ## How it works
 
 ```
-Client                              Venice TEE (AMD SEV-SNP)
+Client                              Venice TEE (Intel TDX)
   |                                        |
-  |── GET /tee/attestation?model=...  ────>|
-  |<── { signing_public_key: "04..." } ────|
+  |── GET /tee/attestation?model=&nonce= ─>|
+  |<── { signing_key, intel_quote, ... } ──|
+  |                                        |
+  |  Parse TDX quote                       |
+  |  Verify nonce in REPORTDATA            |
+  |  Verify signing key address binding    |
+  |  Reject debug mode                     |
   |                                        |
   |  generateKeypair()                     |
-  |  deriveAESKey(clientPriv, teePub)       |
+  |  deriveAESKey(clientPriv, teePub)      |
   |  encryptMessage(aesKey, msg)           |
   |                                        |
   |── POST /chat/completions  ────────────>|
@@ -122,15 +172,19 @@ Client                              Venice TEE (AMD SEV-SNP)
 
 Each response chunk uses a fresh server ephemeral key, so every chunk requires its own ECDH key derivation.
 
-## Security notice
+## Security
 
-This library encrypts and decrypts messages using the public key returned by Venice's TEE attestation endpoint. However, it does **not** currently verify the AMD SEV-SNP attestation report. This means:
+**What's verified:**
+- Signing key is cryptographically bound to the TEE via TDX REPORTDATA
+- Client nonce prevents replay attacks
+- Debug-mode TEEs are rejected
+- ECDH intermediates are zeroized after key derivation
+- Private keys are zeroized on session clear/replacement
 
-- The attestation report signature is not validated against AMD's root of trust
-- The TEE code measurement is not checked against Venice's published values
-- The nonce sent to the attestation endpoint is not verified in the response
-
-In practice, this trusts that the Venice API returns a legitimate TEE public key. Full attestation verification is planned for a future release.
+**What's not verified client-side (by default):**
+- TDX quote signature chain (available via optional DCAP verifier)
+- NVIDIA GPU attestation
+- TEE code measurements (Venice doesn't publish expected values yet)
 
 ## Development
 
