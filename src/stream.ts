@@ -62,14 +62,25 @@ export async function* decryptSSEStream(
       if (buffer.startsWith('data: ')) {
         const data = buffer.slice(6).trim();
         if (data !== '[DONE]') {
+          let event: { choices?: Array<{ delta?: { content?: string } }> };
           try {
-            const event = JSON.parse(data);
-            const content = event.choices?.[0]?.delta?.content;
-            if (content !== undefined && content !== null) {
-              yield await decryptChunk(privateKey, content);
-            }
+            event = JSON.parse(data);
           } catch {
-            // ignore trailing partial data
+            // ignore trailing partial JSON
+            event = {};
+          }
+          const content = event.choices?.[0]?.delta?.content;
+          if (content !== undefined && content !== null) {
+            try {
+              yield await decryptChunk(privateKey, content);
+            } catch (e: unknown) {
+              if (e instanceof DOMException && e.name === 'OperationError') {
+                throw new Error(
+                  'E2EE decryption failed — session may be stale. Clear the session and retry.'
+                );
+              }
+              throw e;
+            }
           }
         }
       }

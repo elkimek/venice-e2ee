@@ -8,7 +8,9 @@ export function fromHex(hex: string): Uint8Array {
   if (hex.length % 2 !== 0) throw new Error('Invalid hex: odd length');
   const bytes = new Uint8Array(hex.length / 2);
   for (let i = 0; i < hex.length; i += 2) {
-    bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16);
+    const byte = parseInt(hex.substring(i, i + 2), 16);
+    if (Number.isNaN(byte)) throw new Error(`Invalid hex character at position ${i}`);
+    bytes[i / 2] = byte;
   }
   return bytes;
 }
@@ -30,25 +32,30 @@ export async function deriveAESKey(
 ): Promise<CryptoKey> {
   const sharedPoint = getSharedSecret(myPrivateKey, theirPublicKeyHex, false);
   const xCoord = sharedPoint.slice(1, 33); // 32-byte x-coordinate
-  const hkdfKey = await crypto.subtle.importKey(
-    'raw',
-    xCoord,
-    'HKDF',
-    false,
-    ['deriveKey']
-  );
-  return crypto.subtle.deriveKey(
-    {
-      name: 'HKDF',
-      hash: 'SHA-256',
-      salt: new Uint8Array(0),
-      info: new TextEncoder().encode('ecdsa_encryption'),
-    },
-    hkdfKey,
-    { name: 'AES-GCM', length: 256 },
-    false,
-    ['encrypt', 'decrypt']
-  );
+  try {
+    const hkdfKey = await crypto.subtle.importKey(
+      'raw',
+      xCoord,
+      'HKDF',
+      false,
+      ['deriveKey']
+    );
+    return await crypto.subtle.deriveKey(
+      {
+        name: 'HKDF',
+        hash: 'SHA-256',
+        salt: new Uint8Array(0),
+        info: new TextEncoder().encode('ecdsa_encryption'),
+      },
+      hkdfKey,
+      { name: 'AES-GCM', length: 256 },
+      false,
+      ['encrypt', 'decrypt']
+    );
+  } finally {
+    sharedPoint.fill(0);
+    xCoord.fill(0);
+  }
 }
 
 export async function encryptMessage(
@@ -82,6 +89,8 @@ export async function decryptChunk(
     return hexString;
   }
   const raw = fromHex(hexString);
+  // Verify uncompressed EC point prefix to avoid false-positive decryption attempts
+  if (raw[0] !== 0x04) return hexString;
   const serverEphemeralPubKey = toHex(raw.slice(0, 65));
   const iv = raw.slice(65, 77);
   const ciphertext = raw.slice(77);

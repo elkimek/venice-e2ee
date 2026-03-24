@@ -6,6 +6,10 @@ import {
   toHex,
 } from './crypto.js';
 import { decryptSSEStream } from './stream.js';
+import {
+  verifyAttestation,
+  type AttestationResponse,
+} from './attestation.js';
 import type {
   VeniceE2EEOptions,
   E2EESession,
@@ -20,21 +24,24 @@ export function createVeniceE2EE(options: VeniceE2EEOptions) {
     apiKey,
     baseUrl = DEFAULT_BASE_URL,
     sessionTTL = DEFAULT_SESSION_TTL,
+    verifyAttestation: shouldVerify = true,
+    dcapVerifier,
   } = options;
   let _session: E2EESession | null = null;
+  let _pendingSession: Promise<E2EESession> | null = null;
 
-  async function fetchModelPublicKey(modelId: string): Promise<string> {
-    const nonce = toHex(crypto.getRandomValues(new Uint8Array(32)));
+  async function fetchAttestation(
+    modelId: string
+  ): Promise<{ response: AttestationResponse; nonceBytes: Uint8Array }> {
+    const nonceBytes = crypto.getRandomValues(new Uint8Array(32));
+    const nonce = toHex(nonceBytes);
     const url = `${baseUrl}/api/v1/tee/attestation?model=${encodeURIComponent(modelId)}&nonce=${nonce}`;
     const res = await fetch(url, {
       headers: { Authorization: `Bearer ${apiKey}` },
     });
     if (!res.ok) throw new Error(`TEE attestation failed (${res.status})`);
-    const data = await res.json();
-    const pubKey =
-      data.signing_public_key || data.signing_key || data.public_key;
-    if (!pubKey) throw new Error('No public key in attestation response');
-    return pubKey;
+    const response: AttestationResponse = await res.json();
+    return { response, nonceBytes };
   }
 
   async function createSession(modelId: string): Promise<E2EESession> {
@@ -46,9 +53,41 @@ export function createVeniceE2EE(options: VeniceE2EEOptions) {
       return _session;
     }
 
+    // Deduplicate concurrent calls for the same session
+    if (_pendingSession) return _pendingSession;
+    _pendingSession = _createSessionInner(modelId);
+    try {
+      return await _pendingSession;
+    } finally {
+      _pendingSession = null;
+    }
+  }
+
+  async function _createSessionInner(modelId: string): Promise<E2EESession> {
     const keypair = generateKeypair();
-    const modelPubKeyHex = await fetchModelPublicKey(modelId);
+    const { response, nonceBytes } = await fetchAttestation(modelId);
+
+    const modelPubKeyHex =
+      response.signing_key || response.signing_public_key;
+    if (!modelPubKeyHex) {
+      throw new Error('No signing key in attestation response');
+    }
+
+    // Verify attestation if enabled
+    let attestation;
+    if (shouldVerify) {
+      attestation = await verifyAttestation(response, nonceBytes, dcapVerifier);
+      if (attestation.errors.length > 0) {
+        throw new Error(
+          `TEE attestation verification failed:\n  - ${attestation.errors.join('\n  - ')}`
+        );
+      }
+    }
+
     const aesKey = await deriveAESKey(keypair.privateKey, modelPubKeyHex);
+
+    // Zeroize old session private key before replacing
+    if (_session) _session.privateKey.fill(0);
 
     _session = {
       ...keypair,
@@ -56,6 +95,7 @@ export function createVeniceE2EE(options: VeniceE2EEOptions) {
       aesKey,
       modelId,
       created: Date.now(),
+      attestation,
     };
 
     return _session;
@@ -121,7 +161,9 @@ export function isE2EEModel(modelId: string): boolean {
   return modelId.startsWith('e2ee-');
 }
 
-export type { VeniceE2EEOptions, E2EESession, EncryptedPayload } from './types.js';
+export type { VeniceE2EEOptions, E2EESession, EncryptedPayload, DcapVerifier, DcapVerifyResult } from './types.js';
+export type { AttestationResponse, AttestationResult, ServerVerification } from './attestation.js';
+export { verifyAttestation, deriveEthAddress } from './attestation.js';
 export {
   generateKeypair,
   deriveAESKey,

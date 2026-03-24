@@ -55,15 +55,23 @@ e2ee.clearSession();
 - Web Crypto API — HKDF, AES-256-GCM (browser-native, zero deps)
 - No Node.js-specific APIs — must work in browsers
 
-### Attestation Verification (v2)
+### Attestation Verification
 
-The attestation endpoint returns an AMD SEV-SNP report. Full verification means:
-1. Validate the attestation report signature against AMD's root of trust
-2. Check the TEE measurement (code hash) against Venice's published values
-3. Verify the nonce matches what the client sent
-4. Confirm the signing public key is bound to the attestation
+Venice runs on **Intel TDX** (not AMD SEV-SNP). The attestation endpoint returns a TDX DCAP v4 quote (~5010 bytes) with a PCK certificate chain. TEE provider is NEAR AI Cloud using dstack framework.
 
-Venice docs: https://docs.venice.ai/api-reference/e2ee (check for attestation format details)
+**v1 — Quote parsing + binding checks:**
+1. Parse TDX quote binary, verify client nonce in REPORTDATA (bytes 32-64)
+2. Verify signing key's Ethereum address in REPORTDATA (bytes 0-20)
+3. Reject debug-mode TEEs (TDATTRIBUTES.TUD.DEBUG bit)
+4. Cross-check Venice's `server_verification` field
+
+**v2 — Full client-side TDX verification:**
+1. Extract PCK cert chain from quote, verify up to pinned Intel SGX Root CA
+2. Verify QE Report + Quote signatures (ECDSA P-256, browser-native via Web Crypto)
+3. ~500-800 lines, no WASM needed
+
+**v3 — Complete:**
+1. CRL checking, TCB evaluation, NVIDIA GPU attestation, event log replay, measurement whitelisting
 
 ## Build
 

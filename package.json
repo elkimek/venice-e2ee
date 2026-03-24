@@ -9,6 +9,10 @@
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./dcap": {
+      "import": "./dist/dcap.js",
+      "types": "./dist/dcap.d.ts"
     }
   },
   "files": [
@@ -22,7 +26,16 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@noble/hashes": "^2.0.1",
     "@noble/secp256k1": "^2.1.0"
+  },
+  "peerDependencies": {
+    "@phala/dcap-qvl": "^0.3.9"
+  },
+  "peerDependenciesMeta": {
+    "@phala/dcap-qvl": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "esbuild": "^0.27.4",
