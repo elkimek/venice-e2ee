@@ -197,6 +197,11 @@ npm run build:browser # single-file ESM bundle
 
 Set `VENICE_API_KEY` in `.env` to run integration tests against the live API.
 
+## Acknowledgments
+
+- [Phala Network](https://phala.network/) — TDX DCAP quote verification is powered by [`@phala/dcap-qvl`](https://github.com/Phala-Network/dcap-qvl) (Apache-2.0), a pure JavaScript implementation of the Intel DCAP Quote Verification Library.
+- [Paul Miller](https://paulmillr.com/) — ECDH key exchange uses [`@noble/secp256k1`](https://github.com/paulmillr/noble-secp256k1) and key derivation uses [`@noble/hashes`](https://github.com/paulmillr/noble-hashes) (MIT), audited noble cryptography libraries.
+
 ## License
 
 GPL-3.0 — see [LICENSE](LICENSE)
