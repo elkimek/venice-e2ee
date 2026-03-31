@@ -8,17 +8,11 @@ End-to-end encryption for [Venice AI](https://venice.ai)'s TEE-backed inference.
 
 ## Install
 
-**JavaScript/TypeScript:**
-
 ```bash
 npm install venice-e2ee
 ```
 
-**Python** (see [`python/README.md`](python/README.md)):
-
-```bash
-pip install venice-e2ee
-```
+> **Python:** See [venice-e2ee-python](https://github.com/elkimek/venice-e2ee-python) for the Python port.
 
 Or use the browser bundle directly:
 
@@ -194,25 +188,13 @@ Each response chunk uses a fresh server ephemeral key, so every chunk requires i
 - NVIDIA GPU attestation
 - TEE code measurements (Venice doesn't publish expected values yet)
 
-## Python port
-
-A wire-format compatible Python port is available in [`python/`](python/) for use with [Hermes Agent](https://github.com/NousResearch/hermes-agent) and other Python projects. See [`python/README.md`](python/README.md) for usage.
-
 ## Development
-
-**TypeScript:**
 
 ```bash
 npm install
 npm test              # unit + integration tests
 npm run build         # TypeScript → dist/
 npm run build:browser # single-file ESM bundle
-```
-
-**Python:**
-
-```bash
-cd python && pip install -e ".[dev]" && pytest tests/ -v
 ```
 
 Set `VENICE_API_KEY` in `.env` to run integration tests against the live API.
