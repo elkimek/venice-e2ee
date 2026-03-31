@@ -1,0 +1,33 @@
+[project]
+name = "venice-e2ee"
+version = "0.1.0"
+description = "End-to-end encryption for Venice AI's TEE-backed LLM inference"
+requires-python = ">=3.11"
+license = "GPL-3.0-only"
+keywords = ["venice", "e2ee", "encryption", "tee", "secp256k1", "aes-gcm"]
+dependencies = [
+    "cryptography>=42.0",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+attestation = ["pycryptodome>=3.20"]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pycryptodome>=3.20",
+]
+
+[project.urls]
+Repository = "https://github.com/elkimek/venice-e2ee"
+Issues = "https://github.com/elkimek/venice-e2ee/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["venice_e2ee"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
