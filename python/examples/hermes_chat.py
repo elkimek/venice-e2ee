@@ -83,6 +83,6 @@ if __name__ == "__main__":
 
     asyncio.run(chat_e2ee(
         api_key=api_key,
-        model="e2ee-deepseek-r1-671b",
+        model="e2ee-qwen3-5-122b-a10b",
         prompt="What is the meaning of life?",
     ))

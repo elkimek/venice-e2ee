@@ -27,7 +27,7 @@ async def main():
     e2ee = create_venice_e2ee(api_key="your-venice-api-key")
 
     # Create session (fetches TEE attestation, verifies quote, ECDH key exchange)
-    session = await e2ee.create_session("e2ee-deepseek-r1-671b")
+    session = await e2ee.create_session("e2ee-qwen3-5-122b-a10b")
 
     # Encrypt messages
     messages = [{"role": "user", "content": "Hello from the encrypted side"}]
@@ -44,7 +44,7 @@ async def main():
                 **payload.headers,
             },
             json={
-                "model": "e2ee-deepseek-r1-671b",
+                "model": "e2ee-qwen3-5-122b-a10b",
                 "messages": payload.encrypted_messages,
                 "venice_parameters": payload.venice_parameters,
                 "stream": True,
