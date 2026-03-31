@@ -4,7 +4,13 @@ version = "0.1.0"
 description = "End-to-end encryption for Venice AI's TEE-backed LLM inference"
 requires-python = ">=3.11"
 license = "GPL-3.0-only"
+readme = "README.md"
 keywords = ["venice", "e2ee", "encryption", "tee", "secp256k1", "aes-gcm"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Topic :: Security :: Cryptography",
+    "Typing :: Typed",
+]
 dependencies = [
     "cryptography>=42.0",
     "httpx>=0.27",
