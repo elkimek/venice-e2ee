@@ -2,6 +2,19 @@
 
 This changelog summarizes user-visible changes to `venice-e2ee`. It also calls out the privacy and verification limits that matter when deciding whether to use a release.
 
+## 0.2.1 — 2026-07-12
+
+### Security maintenance
+
+- Upgraded Vitest, Vite, esbuild, and PostCSS to patched versions, clearing the repository's development-tool vulnerability alerts.
+- Removed the optional Phala DCAP verifier and its transitive dependencies from the default development lockfile. `@phala/dcap-qvl` remains an opt-in peer dependency and is not installed or shipped by default.
+- Added pull-request CI that runs the test suite, both builds, a clean-build diff check, and `npm audit`.
+- Added weekly grouped Dependabot updates for npm development tooling.
+
+### Optional DCAP dependency note
+
+The current `@phala/dcap-qvl` releases depend on `elliptic`, which has an open advisory affecting ECDSA signing. The Venice adapter uses Phala only to verify Intel DCAP signatures and does not provide signing private keys to that dependency, so the advisory's key-exposure mechanism is not exercised by this integration. Consumers whose policy forbids any dependency with an open advisory should not enable the optional Phala verifier until its upstream dependency tree changes.
+
 ## 0.2.0 — 2026-07-12
 
 ### Overview
