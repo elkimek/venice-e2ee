@@ -140,6 +140,30 @@ describe('verifyAttestation', () => {
     expect(result.signingKeyBound).toBe(true);
     expect(result.debugMode).toBe(false);
     expect(result.serverTdxValid).toBe(true);
+    expect(result.verificationLevel).toBe('binding');
+    expect(result.dcapVerified).toBe(false);
+    expect(result.measurements?.mrTd).toBe('0'.repeat(96));
+  });
+
+  it('accepts the documented base64 quote representation', async () => {
+    const response = makeResponse();
+    const quoteBytes = fromHex(response.intel_quote!);
+    response.intel_quote = btoa(String.fromCharCode(...quoteBytes));
+    const result = await verifyAttestation(response, clientNonce);
+    expect(result.errors).toEqual([]);
+    expect(result.verificationLevel).toBe('binding');
+  });
+
+  it('rejects a mismatched attested model', async () => {
+    const result = await verifyAttestation(makeResponse(), clientNonce, {
+      expectedModelId: 'e2ee-other-model',
+    });
+    expect(result.errors).toContainEqual(expect.stringContaining('model mismatch'));
+  });
+
+  it('rejects a negative top-level server verification result', async () => {
+    const result = await verifyAttestation(makeResponse({ verified: false }), clientNonce);
+    expect(result.errors).toContainEqual(expect.stringContaining('server-side'));
   });
 
   it('fails on nonce mismatch', async () => {
@@ -213,6 +237,13 @@ describe('verifyAttestation', () => {
     );
   });
 
+  it('rejects negative server-reported GPU evidence', async () => {
+    const response = makeResponse();
+    response.server_verification!.nvidia = { valid: false, error: 'GPU evidence invalid' };
+    const result = await verifyAttestation(response, clientNonce);
+    expect(result.errors).toContainEqual(expect.stringContaining('NVIDIA attestation'));
+  });
+
   it('detects client/server binding inconsistency', async () => {
     const wrongAddr = crypto.getRandomValues(new Uint8Array(20));
     const reportData = buildReportData(wrongAddr, clientNonce);
@@ -284,6 +315,43 @@ describe('verifyAttestation', () => {
       status: 'UpToDate',
       advisoryIds: ['INTEL-SA-00334'],
     });
+    expect(result.dcapVerified).toBe(true);
+    expect(result.verificationLevel).toBe('dcap');
+  });
+
+  it('enforces an explicit DCAP requirement', async () => {
+    const result = await verifyAttestation(makeResponse(), clientNonce, {
+      requireDcap: true,
+    });
+    expect(result.errors).toContainEqual(expect.stringContaining('no dcapVerifier'));
+    expect(result.verificationLevel).toBe('binding');
+  });
+
+  it('reports and validates caller-supplied measurements', async () => {
+    const result = await verifyAttestation(makeResponse(), clientNonce, {
+      dcapVerifier: async () => ({ status: 'UpToDate', advisoryIds: [] }),
+      expectedMeasurements: { mrTd: '0'.repeat(96) },
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.measurementsVerified).toBe(true);
+    expect(result.verificationLevel).toBe('measured');
+  });
+
+  it('does not accept a measurement allowlist on an unverified quote', async () => {
+    const result = await verifyAttestation(makeResponse(), clientNonce, {
+      expectedMeasurements: { mrTd: '0'.repeat(96) },
+    });
+    expect(result.measurementsVerified).toBe(true);
+    expect(result.verificationLevel).toBe('binding');
+    expect(result.errors).toContainEqual(expect.stringContaining('requires successful DCAP'));
+  });
+
+  it('rejects a measurement mismatch', async () => {
+    const result = await verifyAttestation(makeResponse(), clientNonce, {
+      expectedMeasurements: { mrTd: 'f'.repeat(96) },
+    });
+    expect(result.measurementsVerified).toBe(false);
+    expect(result.errors).toContainEqual(expect.stringContaining('mrTd'));
   });
 
   it('reports dcap verifier failure', async () => {
@@ -299,6 +367,16 @@ describe('verifyAttestation', () => {
       expect.stringContaining('DCAP verification failed: PCK cert chain invalid')
     );
     expect(result.dcap).toBeUndefined();
+  });
+
+  it('rejects an unknown DCAP TCB status', async () => {
+    const result = await verifyAttestation(
+      makeResponse(),
+      clientNonce,
+      async () => ({ status: 'Unknown', advisoryIds: [] })
+    );
+    expect(result.dcapVerified).toBe(false);
+    expect(result.errors).toContainEqual(expect.stringContaining('unacceptable TCB status'));
   });
 
   it('skips dcap when no verifier provided', async () => {

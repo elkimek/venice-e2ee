@@ -7,5 +7,5 @@ export declare function generateKeypair(): {
 };
 export declare function deriveAESKey(myPrivateKey: Uint8Array, theirPublicKeyHex: string): Promise<CryptoKey>;
 export declare function encryptMessage(aesKey: CryptoKey, clientPubKeyBytes: Uint8Array, plaintext: string): Promise<string>;
-export declare function decryptChunk(clientPrivateKey: Uint8Array, hexString: string): Promise<string>;
+export declare function decryptChunk(clientPrivateKey: Uint8Array, hexString: string, allowPlaintext?: boolean): Promise<string>;
 //# sourceMappingURL=crypto.d.ts.map

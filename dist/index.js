@@ -4,7 +4,10 @@ import { verifyAttestation, } from './attestation.js';
 const DEFAULT_BASE_URL = 'https://api.venice.ai';
 const DEFAULT_SESSION_TTL = 30 * 60 * 1000; // 30 minutes
 export function createVeniceE2EE(options) {
-    const { apiKey, baseUrl = DEFAULT_BASE_URL, sessionTTL = DEFAULT_SESSION_TTL, verifyAttestation: shouldVerify = true, dcapVerifier, } = options;
+    const { apiKey, baseUrl = DEFAULT_BASE_URL, sessionTTL = DEFAULT_SESSION_TTL, verifyAttestation: shouldVerify = true, dcapVerifier, requireDcap = false, expectedMeasurements, allowPlaintextResponses = false, } = options;
+    if (!shouldVerify && (requireDcap || expectedMeasurements)) {
+        throw new Error('Attestation policy cannot be required when verifyAttestation is false');
+    }
     let _session = null;
     let _pendingSession = null;
     async function fetchAttestation(modelId) {
@@ -46,7 +49,12 @@ export function createVeniceE2EE(options) {
         // Verify attestation if enabled
         let attestation;
         if (shouldVerify) {
-            attestation = await verifyAttestation(response, nonceBytes, dcapVerifier);
+            attestation = await verifyAttestation(response, nonceBytes, {
+                dcapVerifier,
+                requireDcap,
+                expectedMeasurements,
+                expectedModelId: modelId,
+            });
             if (attestation.errors.length > 0) {
                 throw new Error(`TEE attestation verification failed:\n  - ${attestation.errors.join('\n  - ')}`);
             }
@@ -81,10 +89,10 @@ export function createVeniceE2EE(options) {
         };
     }
     async function decrypt(hexChunk, session) {
-        return decryptChunk(session.privateKey, hexChunk);
+        return decryptChunk(session.privateKey, hexChunk, allowPlaintextResponses);
     }
     async function* decryptStream(body, session) {
-        yield* decryptSSEStream(body, session.privateKey);
+        yield* decryptSSEStream(body, session.privateKey, allowPlaintextResponses);
     }
     function clearSession() {
         if (_session) {

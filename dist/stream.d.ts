@@ -10,5 +10,5 @@
  *     process.stdout.write(text);
  *   }
  */
-export declare function decryptSSEStream(body: ReadableStream<Uint8Array>, privateKey: Uint8Array): AsyncGenerator<string>;
+export declare function decryptSSEStream(body: ReadableStream<Uint8Array>, privateKey: Uint8Array, allowPlaintextResponses?: boolean): AsyncGenerator<string>;
 //# sourceMappingURL=stream.d.ts.map
