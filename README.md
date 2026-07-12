@@ -6,6 +6,8 @@ The library encrypts message `content` before transmission and decrypts model-ou
 
 Do not treat the default `binding` result as proof of a fully verified production enclave. Venice still receives request metadata including the API credential, selected model, roles, request shape, token settings, timing, sizes, and network metadata.
 
+See the [changelog](CHANGELOG.md) for a user-readable summary of each release and its security boundaries.
+
 > **Note:** This library uses standard cryptographic primitives (ECDH, HKDF, AES-256-GCM) via audited implementations (`@noble/secp256k1`, Web Crypto API). No custom cryptography — just Venice's E2EE protocol extracted into a reusable package. Vibecoded.
 
 **Protocol:** ECDH (secp256k1) key exchange → HKDF-SHA256 key derivation → AES-256-GCM encryption
