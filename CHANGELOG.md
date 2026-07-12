@@ -9,7 +9,7 @@ This changelog summarizes user-visible changes to `venice-e2ee`. It also calls o
 - Upgraded Vitest, Vite, esbuild, and PostCSS to patched versions, clearing the repository's development-tool vulnerability alerts.
 - Removed the optional Phala DCAP verifier and its transitive dependencies from the default development lockfile. `@phala/dcap-qvl` remains an opt-in peer dependency and is not installed or shipped by default.
 - Added pull-request CI that runs the test suite, both builds, a clean-build diff check, and `npm audit`.
-- Added weekly grouped Dependabot updates for npm development tooling.
+- Enabled GitHub's automated Dependabot security-update pull requests for future patched advisories.
 
 ### Optional DCAP dependency note
 
