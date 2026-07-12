@@ -1,7 +1,9 @@
-// Dynamic import to avoid hard dependency — @phala/dcap-qvl is a peer dep
+// Keep the package name indirect so TypeScript and browser bundlers do not
+// require an optional peer dependency unless the verifier is actually used.
 async function loadPhala() {
+    const packageName = '@phala/dcap-qvl';
     try {
-        return await import('@phala/dcap-qvl');
+        return await import(packageName);
     }
     catch {
         throw new Error('@phala/dcap-qvl is required for DCAP verification. Install it: npm install @phala/dcap-qvl');
@@ -26,7 +28,9 @@ export function createDcapVerifier(pccsUrl) {
         const result = await phala.getCollateralAndVerify(quoteBytes, url);
         return {
             status: String(result.status),
-            advisoryIds: [...result.advisory_ids],
+            advisoryIds: Array.isArray(result.advisory_ids)
+                ? result.advisory_ids.map(String)
+                : [],
         };
     };
 }

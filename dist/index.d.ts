@@ -10,8 +10,8 @@ export declare function createVeniceE2EE(options: VeniceE2EEOptions): {
     clearSession: () => void;
 };
 export declare function isE2EEModel(modelId: string): boolean;
-export type { VeniceE2EEOptions, E2EESession, EncryptedPayload, DcapVerifier, DcapVerifyResult } from './types.js';
-export type { AttestationResponse, AttestationResult, ServerVerification } from './attestation.js';
+export type { VeniceE2EEOptions, E2EESession, EncryptedPayload, DcapVerifier, DcapVerifyResult, ExpectedTdxMeasurements, TdxMeasurements, } from './types.js';
+export type { AttestationResponse, AttestationResult, AttestationVerificationOptions, ServerVerification, } from './attestation.js';
 export { verifyAttestation, deriveEthAddress } from './attestation.js';
 export { generateKeypair, deriveAESKey, encryptMessage, decryptChunk, toHex, fromHex, } from './crypto.js';
 export { decryptSSEStream } from './stream.js';
