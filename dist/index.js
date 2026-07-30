@@ -1,5 +1,6 @@
 import { generateKeypair, deriveAESKey, encryptMessage, decryptChunk, toHex, } from './crypto.js';
 import { decryptSSEStream } from './stream.js';
+import { flattenMessageContent } from './tools.js';
 import { verifyAttestation, } from './attestation.js';
 const DEFAULT_BASE_URL = 'https://api.venice.ai';
 const DEFAULT_SESSION_TTL = 30 * 60 * 1000; // 30 minutes
@@ -72,7 +73,7 @@ export function createVeniceE2EE(options) {
         const encryptedMessages = await Promise.all(messages.map(async ({ role, content, ...rest }) => ({
             ...rest,
             role,
-            content: await encryptMessage(session.aesKey, session.publicKey, typeof content === 'string' ? content : ''),
+            content: await encryptMessage(session.aesKey, session.publicKey, flattenMessageContent(content)),
         })));
         return {
             encryptedMessages,
@@ -110,5 +111,5 @@ export function isE2EEModel(modelId) {
 export { verifyAttestation, deriveEthAddress } from './attestation.js';
 export { generateKeypair, deriveAESKey, encryptMessage, decryptChunk, toHex, fromHex, } from './crypto.js';
 export { decryptSSEStream } from './stream.js';
-export { buildToolSystemPrompt, renderToolMessages, parseToolCalls, generateToolCallId, ToolCallStreamParser, TOOL_CALL_OPEN, TOOL_CALL_CLOSE, TOOL_RESPONSE_OPEN, TOOL_RESPONSE_CLOSE, } from './tools.js';
+export { buildToolSystemPrompt, renderToolMessages, parseToolCalls, generateToolCallId, flattenMessageContent, ToolCallStreamParser, TOOL_CALL_OPEN, TOOL_CALL_CLOSE, TOOL_RESPONSE_OPEN, TOOL_RESPONSE_CLOSE, } from './tools.js';
 //# sourceMappingURL=index.js.map

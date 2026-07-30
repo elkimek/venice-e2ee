@@ -4,6 +4,7 @@ import {
   renderToolMessages,
   parseToolCalls,
   ToolCallStreamParser,
+  flattenMessageContent,
   TOOL_CALL_OPEN,
   TOOL_CALL_CLOSE,
   type ToolDefinition,
@@ -97,6 +98,50 @@ describe('renderToolMessages', () => {
 
   it('turns null content into an empty string', () => {
     expect(renderToolMessages([{ role: 'assistant', content: null }])[0].content).toBe('');
+  });
+});
+
+describe('flattenMessageContent', () => {
+  it('passes strings through', () => {
+    expect(flattenMessageContent('hello')).toBe('hello');
+  });
+
+  it('flattens the multipart arrays AI SDK clients send', () => {
+    expect(flattenMessageContent([{ type: 'text', text: 'hello' }])).toBe('hello');
+  });
+
+  it('joins several text parts', () => {
+    expect(
+      flattenMessageContent([
+        { type: 'text', text: 'a' },
+        { type: 'text', text: 'b' },
+      ])
+    ).toBe('ab');
+  });
+
+  it('accepts the newer input_text/output_text part names', () => {
+    expect(flattenMessageContent([{ type: 'input_text', text: 'in' }])).toBe('in');
+    expect(flattenMessageContent([{ type: 'output_text', text: 'out' }])).toBe('out');
+  });
+
+  it('maps null and undefined to an empty string', () => {
+    expect(flattenMessageContent(null)).toBe('');
+    expect(flattenMessageContent(undefined)).toBe('');
+  });
+
+  it('throws on parts it cannot represent rather than dropping them', () => {
+    expect(() =>
+      flattenMessageContent([{ type: 'image_url', image_url: { url: 'http://x/y.png' } }])
+    ).toThrow(/text only/);
+  });
+});
+
+describe('renderToolMessages with multipart content', () => {
+  it('does not blank out array content', () => {
+    const [msg] = renderToolMessages([
+      { role: 'user', content: [{ type: 'text', text: 'Reply with BANANA' }] },
+    ]);
+    expect(msg.content).toBe('Reply with BANANA');
   });
 });
 

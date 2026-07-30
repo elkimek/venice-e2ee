@@ -38,14 +38,55 @@ export type ToolChoice =
   | 'required'
   | { type: 'function'; function: { name: string } };
 
+/** One part of a multipart message content array. */
+export interface ContentPart {
+  type: string;
+  text?: string;
+  [key: string]: unknown;
+}
+
 /** A chat message in OpenAI shape, including the tool-calling fields. */
 export interface ToolChatMessage {
   role: string;
-  content?: string | null;
+  content?: string | ContentPart[] | null;
   tool_calls?: ToolCall[];
   tool_call_id?: string;
   name?: string;
   [key: string]: unknown;
+}
+
+/**
+ * Reduce OpenAI message content to the string that gets encrypted.
+ *
+ * Content may be a plain string or a multipart array — the Vercel AI SDK,
+ * LangChain and other clients always send arrays, e.g.
+ * `[{type: 'text', text: 'hello'}]`. Treating those as "not a string" and
+ * substituting an empty string silently sends an empty prompt to the model.
+ *
+ * Throws on parts that cannot be represented as text rather than dropping them,
+ * so an unsupported attachment fails loudly instead of producing an answer to a
+ * question the model never saw.
+ */
+export function flattenMessageContent(
+  content: string | ContentPart[] | null | undefined
+): string {
+  if (typeof content === 'string') return content;
+  if (content === null || content === undefined) return '';
+  if (!Array.isArray(content)) return String(content);
+
+  return content
+    .map((part) => {
+      if (typeof part === 'string') return part;
+      // 'input_text'/'output_text' are the newer OpenAI part names.
+      if (part?.type === 'text' || part?.type === 'input_text' || part?.type === 'output_text') {
+        return part.text ?? '';
+      }
+      if (part?.type === 'refusal') return '';
+      throw new Error(
+        `Unsupported message content part "${part?.type}": Venice E2EE models accept text only.`
+      );
+    })
+    .join('');
 }
 
 export const TOOL_CALL_OPEN = '<tool_call>';
@@ -165,7 +206,7 @@ export function renderToolMessages(
   }
 
   return messages.map((msg) => {
-    const text = typeof msg.content === 'string' ? msg.content : '';
+    const text = flattenMessageContent(msg.content);
 
     if (msg.role === 'assistant' && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
       const blocks = msg.tool_calls.map(renderToolCall).join('\n');

@@ -6,6 +6,7 @@ import {
   toHex,
 } from './crypto.js';
 import { decryptSSEStream } from './stream.js';
+import { flattenMessageContent, type ContentPart } from './tools.js';
 import {
   verifyAttestation,
   type AttestationResponse,
@@ -102,7 +103,11 @@ export function createVeniceE2EE(options: VeniceE2EEOptions) {
   }
 
   async function encrypt(
-    messages: Array<{ role: string; content?: string | null; [key: string]: unknown }>,
+    messages: Array<{
+      role: string;
+      content?: string | ContentPart[] | null;
+      [key: string]: unknown;
+    }>,
     session: E2EESession
   ): Promise<EncryptedPayload> {
     // Every role must be encrypted, assistant and tool included: the TEE rejects
@@ -115,7 +120,7 @@ export function createVeniceE2EE(options: VeniceE2EEOptions) {
         content: await encryptMessage(
           session.aesKey,
           session.publicKey,
-          typeof content === 'string' ? content : ''
+          flattenMessageContent(content)
         ),
       }))
     );
@@ -182,6 +187,7 @@ export {
   renderToolMessages,
   parseToolCalls,
   generateToolCallId,
+  flattenMessageContent,
   ToolCallStreamParser,
   TOOL_CALL_OPEN,
   TOOL_CALL_CLOSE,
@@ -194,5 +200,6 @@ export type {
   ToolCall,
   ToolChoice,
   ToolChatMessage,
+  ContentPart,
   ParseResult,
 } from './tools.js';

@@ -37,15 +37,34 @@ export type ToolChoice = 'none' | 'auto' | 'required' | {
         name: string;
     };
 };
+/** One part of a multipart message content array. */
+export interface ContentPart {
+    type: string;
+    text?: string;
+    [key: string]: unknown;
+}
 /** A chat message in OpenAI shape, including the tool-calling fields. */
 export interface ToolChatMessage {
     role: string;
-    content?: string | null;
+    content?: string | ContentPart[] | null;
     tool_calls?: ToolCall[];
     tool_call_id?: string;
     name?: string;
     [key: string]: unknown;
 }
+/**
+ * Reduce OpenAI message content to the string that gets encrypted.
+ *
+ * Content may be a plain string or a multipart array — the Vercel AI SDK,
+ * LangChain and other clients always send arrays, e.g.
+ * `[{type: 'text', text: 'hello'}]`. Treating those as "not a string" and
+ * substituting an empty string silently sends an empty prompt to the model.
+ *
+ * Throws on parts that cannot be represented as text rather than dropping them,
+ * so an unsupported attachment fails loudly instead of producing an answer to a
+ * question the model never saw.
+ */
+export declare function flattenMessageContent(content: string | ContentPart[] | null | undefined): string;
 export declare const TOOL_CALL_OPEN = "<tool_call>";
 export declare const TOOL_CALL_CLOSE = "</tool_call>";
 export declare const TOOL_RESPONSE_OPEN = "<tool_response>";
