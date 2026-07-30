@@ -3,7 +3,8 @@ export declare function createVeniceE2EE(options: VeniceE2EEOptions): {
     createSession: (modelId: string) => Promise<E2EESession>;
     encrypt: (messages: Array<{
         role: string;
-        content: string;
+        content?: string | null;
+        [key: string]: unknown;
     }>, session: E2EESession) => Promise<EncryptedPayload>;
     decryptChunk: (hexChunk: string, session: E2EESession) => Promise<string>;
     decryptStream: (body: ReadableStream<Uint8Array>, session: E2EESession) => AsyncGenerator<string>;
@@ -15,4 +16,6 @@ export type { AttestationResponse, AttestationResult, ServerVerification } from 
 export { verifyAttestation, deriveEthAddress } from './attestation.js';
 export { generateKeypair, deriveAESKey, encryptMessage, decryptChunk, toHex, fromHex, } from './crypto.js';
 export { decryptSSEStream } from './stream.js';
+export { buildToolSystemPrompt, renderToolMessages, parseToolCalls, generateToolCallId, ToolCallStreamParser, TOOL_CALL_OPEN, TOOL_CALL_CLOSE, TOOL_RESPONSE_OPEN, TOOL_RESPONSE_CLOSE, } from './tools.js';
+export type { ToolDefinition, ToolFunctionDefinition, ToolCall, ToolChoice, ToolChatMessage, ParseResult, } from './tools.js';
 //# sourceMappingURL=index.d.ts.map

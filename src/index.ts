@@ -102,16 +102,20 @@ export function createVeniceE2EE(options: VeniceE2EEOptions) {
   }
 
   async function encrypt(
-    messages: Array<{ role: string; content: string }>,
+    messages: Array<{ role: string; content?: string | null; [key: string]: unknown }>,
     session: E2EESession
   ): Promise<EncryptedPayload> {
+    // Every role must be encrypted, assistant and tool included: the TEE rejects
+    // a request with any plaintext message content ("E2EE decryption failed"),
+    // so the whole conversation stays ciphertext end to end.
     const encryptedMessages = await Promise.all(
-      messages.map(async (msg) => ({
-        role: msg.role,
+      messages.map(async ({ role, content, ...rest }) => ({
+        ...rest,
+        role,
         content: await encryptMessage(
           session.aesKey,
           session.publicKey,
-          msg.content
+          typeof content === 'string' ? content : ''
         ),
       }))
     );
@@ -173,3 +177,22 @@ export {
   fromHex,
 } from './crypto.js';
 export { decryptSSEStream } from './stream.js';
+export {
+  buildToolSystemPrompt,
+  renderToolMessages,
+  parseToolCalls,
+  generateToolCallId,
+  ToolCallStreamParser,
+  TOOL_CALL_OPEN,
+  TOOL_CALL_CLOSE,
+  TOOL_RESPONSE_OPEN,
+  TOOL_RESPONSE_CLOSE,
+} from './tools.js';
+export type {
+  ToolDefinition,
+  ToolFunctionDefinition,
+  ToolCall,
+  ToolChoice,
+  ToolChatMessage,
+  ParseResult,
+} from './tools.js';

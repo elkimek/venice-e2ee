@@ -43,6 +43,7 @@ export interface EncryptedPayload {
     encryptedMessages: Array<{
         role: string;
         content: string;
+        [key: string]: unknown;
     }>;
     headers: Record<string, string>;
     veniceParameters: {

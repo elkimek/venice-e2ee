@@ -44,7 +44,7 @@ export interface E2EESession {
 }
 
 export interface EncryptedPayload {
-  encryptedMessages: Array<{ role: string; content: string }>;
+  encryptedMessages: Array<{ role: string; content: string; [key: string]: unknown }>;
   headers: Record<string, string>;
   veniceParameters: { enable_e2ee: true };
 }

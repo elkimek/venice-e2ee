@@ -66,9 +66,13 @@ export function createVeniceE2EE(options) {
         return _session;
     }
     async function encrypt(messages, session) {
-        const encryptedMessages = await Promise.all(messages.map(async (msg) => ({
-            role: msg.role,
-            content: await encryptMessage(session.aesKey, session.publicKey, msg.content),
+        // Every role must be encrypted, assistant and tool included: the TEE rejects
+        // a request with any plaintext message content ("E2EE decryption failed"),
+        // so the whole conversation stays ciphertext end to end.
+        const encryptedMessages = await Promise.all(messages.map(async ({ role, content, ...rest }) => ({
+            ...rest,
+            role,
+            content: await encryptMessage(session.aesKey, session.publicKey, typeof content === 'string' ? content : ''),
         })));
         return {
             encryptedMessages,
@@ -106,4 +110,5 @@ export function isE2EEModel(modelId) {
 export { verifyAttestation, deriveEthAddress } from './attestation.js';
 export { generateKeypair, deriveAESKey, encryptMessage, decryptChunk, toHex, fromHex, } from './crypto.js';
 export { decryptSSEStream } from './stream.js';
+export { buildToolSystemPrompt, renderToolMessages, parseToolCalls, generateToolCallId, ToolCallStreamParser, TOOL_CALL_OPEN, TOOL_CALL_CLOSE, TOOL_RESPONSE_OPEN, TOOL_RESPONSE_CLOSE, } from './tools.js';
 //# sourceMappingURL=index.js.map

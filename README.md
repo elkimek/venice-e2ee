@@ -121,6 +121,70 @@ This adds ~500KB to browser bundles. For most use cases, the default binding che
 
 Returns `true` if the model ID starts with `e2ee-`.
 
+## Function calling
+
+Venice's E2EE gateway drops the OpenAI `tools` request parameter — a request carrying
+encrypted messages reaches the model with no tool schemas attached. (The same model
+returns native tool calls when the E2EE headers are absent, so this is a property of the
+encrypted path.) Sending `tools` anyway would leak every schema in plaintext *and* leave
+the model unable to use them.
+
+These helpers instead carry function calling inside the encrypted channel, so tool names,
+descriptions, arguments and results stay ciphertext like the rest of the conversation.
+
+```js
+import {
+  createVeniceE2EE,
+  buildToolSystemPrompt,
+  renderToolMessages,
+  ToolCallStreamParser,
+} from 'venice-e2ee';
+
+const tools = [{
+  type: 'function',
+  function: {
+    name: 'get_weather',
+    description: 'Get the current weather in a given city',
+    parameters: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] },
+  },
+}];
+
+// 1. Fold tool schemas and any prior tool-call history into message content.
+const toolPrompt = buildToolSystemPrompt(tools, 'auto');
+const messages = [
+  { role: 'system', content: toolPrompt },
+  ...renderToolMessages(conversation),
+];
+
+// 2. Encrypt and send as usual — no `tools` field on the request.
+const { encryptedMessages, headers, veniceParameters } = await e2ee.encrypt(messages, session);
+
+// 3. Parse tool calls back out of the decrypted stream.
+const parser = new ToolCallStreamParser();
+for await (const text of e2ee.decryptStream(response.body, session)) {
+  const { content, toolCalls } = parser.push(text);
+  if (content) process.stdout.write(content);
+  for (const call of toolCalls) console.log('tool call:', call.function.name, call.function.arguments);
+}
+const tail = parser.flush();
+// parser.sawToolCall === true  →  finish_reason should be 'tool_calls'
+```
+
+| Export | Purpose |
+|---|---|
+| `buildToolSystemPrompt(tools, toolChoice?)` | Render tool schemas into a system prompt. Returns `null` for `tool_choice: 'none'` or an empty list. |
+| `renderToolMessages(messages)` | Fold assistant `tool_calls` and `tool` results into plain message content, dropping the plaintext `tool_calls` field. |
+| `ToolCallStreamParser` | Incremental parser splitting `<tool_call>` blocks from prose. `push(chunk)` → `{content, toolCalls}`; `flush()` at end of stream. |
+| `parseToolCalls(text)` | One-shot version for a complete response body. |
+| `generateToolCallId()` | Random OpenAI-style `call_…` id. |
+
+The parser handles tags split across stream chunks, markdown fences, missing closing tags,
+and the chained `<tool_call>{..}<tool_call>{..}</tool_call>` form GLM emits for parallel
+calls.
+
+Because this is prompt-driven rather than constrained decoding, a model can emit a
+malformed call — validate arguments before acting on them.
+
 ### Low-level exports
 
 For custom integrations, the individual crypto and attestation primitives are also exported:
@@ -171,6 +235,13 @@ Client                              Venice TEE (Intel TDX)
 ```
 
 Each response chunk uses a fresh server ephemeral key, so every chunk requires its own ECDH key derivation.
+
+**Every message must be encrypted, whatever its role.** Venice's published examples encrypt
+only `user` and `system` messages, but a request containing any plaintext content — an
+`assistant` turn from the conversation history, for instance — is rejected with
+`400 E2EE decryption failed`. `encrypt()` therefore encrypts every message it is given, and
+`assistant` and `tool` turns decrypt correctly inside the TEE, so the whole conversation
+stays ciphertext.
 
 ## Security
 
