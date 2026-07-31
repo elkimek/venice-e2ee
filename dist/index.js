@@ -70,8 +70,7 @@ export function createVeniceE2EE(options) {
         // Every role must be encrypted, assistant and tool included: the TEE rejects
         // a request with any plaintext message content ("E2EE decryption failed"),
         // so the whole conversation stays ciphertext end to end.
-        const encryptedMessages = await Promise.all(messages.map(async ({ role, content, ...rest }) => ({
-            ...rest,
+        const encryptedMessages = await Promise.all(messages.map(async ({ role, content }) => ({
             role,
             content: await encryptMessage(session.aesKey, session.publicKey, flattenMessageContent(content)),
         })));

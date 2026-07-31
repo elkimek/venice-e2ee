@@ -168,9 +168,6 @@ export function renderToolMessages(messages) {
             return {
                 role: 'tool',
                 content: `${TOOL_RESPONSE_OPEN}\n${payload}\n${TOOL_RESPONSE_CLOSE}`,
-                // Kept as opaque metadata: Venice accepts tool messages carrying it even
-                // though the preceding assistant turn no longer has a `tool_calls` field.
-                ...(msg.tool_call_id ? { tool_call_id: msg.tool_call_id } : {}),
             };
         }
         return { role: msg.role, content: text };
@@ -194,6 +191,28 @@ function stripFences(block) {
     const trimmed = block.trim();
     const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/.exec(trimmed);
     return fenced ? fenced[1].trim() : trimmed;
+}
+/** Find a delimiter without matching delimiter text inside a JSON string. */
+function findTagOutsideJsonString(text, tag) {
+    let inString = false;
+    let escaped = false;
+    for (let i = 0; i <= text.length - tag.length; i++) {
+        const ch = text[i];
+        if (inString) {
+            if (escaped)
+                escaped = false;
+            else if (ch === '\\')
+                escaped = true;
+            else if (ch === '"')
+                inString = false;
+            continue;
+        }
+        if (ch === '"')
+            inString = true;
+        else if (text.startsWith(tag, i))
+            return i;
+    }
+    return -1;
 }
 /**
  * Extract the first balanced JSON object from `text`, ignoring braces inside
@@ -263,8 +282,8 @@ export class ToolCallStreamParser {
                 // A block ends at `</tool_call>` — or at the next `<tool_call>`, because
                 // GLM emits parallel calls as `<tool_call>{..}<tool_call>{..}</tool_call>`,
                 // using the opening tag as a separator instead of closing each block.
-                const close = this.buffer.indexOf(TOOL_CALL_CLOSE);
-                const nextOpen = this.buffer.indexOf(TOOL_CALL_OPEN);
+                const close = findTagOutsideJsonString(this.buffer, TOOL_CALL_CLOSE);
+                const nextOpen = findTagOutsideJsonString(this.buffer, TOOL_CALL_OPEN);
                 const closesFirst = close !== -1 && (nextOpen === -1 || close <= nextOpen);
                 const chained = nextOpen !== -1 && !closesFirst;
                 if (!closesFirst && !chained)

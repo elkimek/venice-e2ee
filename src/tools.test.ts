@@ -88,7 +88,7 @@ describe('renderToolMessages', () => {
     ]);
     expect(rendered[1].content).toContain('get_weather');
     expect(rendered[1].content).toContain('{\\"temp\\":18}');
-    expect(rendered[1].tool_call_id).toBe('call_1');
+    expect((rendered[1] as Record<string, unknown>).tool_call_id).toBeUndefined();
   });
 
   it('leaves ordinary messages untouched', () => {
@@ -191,6 +191,26 @@ describe('parseToolCalls', () => {
     expect(JSON.parse(toolCalls[0].function.arguments)).toEqual({ note: 'has } brace' });
   });
 
+  it('does not treat a closing tag inside arguments as a block boundary', () => {
+    const value = `literal ${TOOL_CALL_CLOSE} text`;
+    const { content, toolCalls } = parseToolCalls(
+      block(JSON.stringify({ name: 'a', arguments: { value } }))
+    );
+    expect(content).toBe('');
+    expect(toolCalls).toHaveLength(1);
+    expect(JSON.parse(toolCalls[0].function.arguments)).toEqual({ value });
+  });
+
+  it('does not treat an opening tag inside arguments as a chained call', () => {
+    const value = `literal ${TOOL_CALL_OPEN} text`;
+    const { content, toolCalls } = parseToolCalls(
+      block(JSON.stringify({ name: 'a', arguments: { value } }))
+    );
+    expect(content).toBe('');
+    expect(toolCalls).toHaveLength(1);
+    expect(JSON.parse(toolCalls[0].function.arguments)).toEqual({ value });
+  });
+
   it('recovers a call missing its closing tag', () => {
     const { toolCalls } = parseToolCalls(
       `${TOOL_CALL_OPEN}\n{"name":"get_weather","arguments":{"city":"Nitra"}}`
@@ -249,6 +269,21 @@ describe('ToolCallStreamParser', () => {
     const calls = chunks.flatMap((c) => parser.push(c).toolCalls);
     expect(calls).toHaveLength(1);
     expect(JSON.parse(calls[0].function.arguments)).toEqual({ city: 'Bratislava' });
+  });
+
+  it('ignores a chunk-split closing tag inside an argument string', () => {
+    const parser = new ToolCallStreamParser();
+    const first = parser.push(
+      `${TOOL_CALL_OPEN}{"name":"a","arguments":{"value":"literal </tool_`
+    );
+    expect(first).toEqual({ content: '', toolCalls: [] });
+
+    const second = parser.push(`call> text"}}${TOOL_CALL_CLOSE}`);
+    expect(second.content).toBe('');
+    expect(second.toolCalls).toHaveLength(1);
+    expect(JSON.parse(second.toolCalls[0].function.arguments)).toEqual({
+      value: `literal ${TOOL_CALL_CLOSE} text`,
+    });
   });
 
   it('streams prose through unchanged', () => {
