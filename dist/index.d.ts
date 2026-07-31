@@ -19,5 +19,5 @@ export { verifyAttestation, deriveEthAddress } from './attestation.js';
 export { generateKeypair, deriveAESKey, encryptMessage, decryptChunk, toHex, fromHex, } from './crypto.js';
 export { decryptSSEStream } from './stream.js';
 export { buildToolSystemPrompt, renderToolMessages, parseToolCalls, generateToolCallId, flattenMessageContent, ToolCallStreamParser, TOOL_CALL_OPEN, TOOL_CALL_CLOSE, TOOL_RESPONSE_OPEN, TOOL_RESPONSE_CLOSE, } from './tools.js';
-export type { ToolDefinition, ToolFunctionDefinition, ToolCall, ToolChoice, ToolChatMessage, ContentPart, ParseResult, } from './tools.js';
+export type { ToolDefinition, ToolFunctionDefinition, ToolCall, ToolChoice, ToolChatMessage, ContentPart, ParseResult, ToolParserOptions, } from './tools.js';
 //# sourceMappingURL=index.d.ts.map

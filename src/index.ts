@@ -209,4 +209,5 @@ export type {
   ToolChatMessage,
   ContentPart,
   ParseResult,
+  ToolParserOptions,
 } from './tools.js';

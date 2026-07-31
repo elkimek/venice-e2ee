@@ -51,6 +51,19 @@ export const TOOL_CALL_CLOSE = '</tool_call>';
 export const TOOL_RESPONSE_OPEN = '<tool_response>';
 export const TOOL_RESPONSE_CLOSE = '</tool_response>';
 /**
+ * Tag pairs recognised while parsing. The first is canonical: it is what the
+ * system prompt asks for and what {@link renderToolMessages} emits. The rest are
+ * forms models reach for on their own regardless of what the prompt said —
+ * accepting them costs nothing and turns a dropped call into a working one.
+ */
+const TOOL_CALL_TAGS = [
+    { open: TOOL_CALL_OPEN, close: TOOL_CALL_CLOSE },
+    { open: '<function_call>', close: '</function_call>' },
+    { open: '<|tool_call|>', close: '<|/tool_call|>' },
+];
+/** Cap on content held back while deciding whether it is an untagged tool call. */
+const UNTAGGED_HOLD_LIMIT = 64 * 1024;
+/**
  * Generate an OpenAI-style tool call id. Random rather than sequential so ids
  * stay unique across the parallel requests that share one session.
  */
@@ -101,27 +114,61 @@ ${TOOL_CALL_OPEN}
 ${TOOL_CALL_CLOSE}
 
 Rules:
-- \`arguments\` must be a JSON object matching the function's parameter schema.
+- \`arguments\` must be a JSON object matching the function's parameter schema,
+  even when the function takes a single parameter.
 - Emit the block on its own, with no surrounding prose or markdown fences.
 - To call several functions, emit several blocks in a row.
-- Function results come back as ${TOOL_RESPONSE_OPEN} blocks; use them to answer.
+- Never emit the JSON payload on its own — without the surrounding tags it is
+  read as an ordinary answer and the function is not called.
+
+Results come back as:
+
+${TOOL_RESPONSE_OPEN}
+{"id": "<id-of-the-call>", "name": "<function-name>", "result": <result>}
+${TOOL_RESPONSE_CLOSE}
+
+Match \`id\` against the call it answers when several calls are outstanding.
 
 ${instruction}`;
 }
-function parseArgumentsToJsonString(raw) {
+/**
+ * Normalise whatever the model put in `arguments` into the JSON *string* OpenAI
+ * clients expect.
+ *
+ * Models routinely emit the sole argument bare — `"arguments": "Bratislava"` or
+ * `"arguments": 5` instead of `{"city": "Bratislava"}`. When the schema declares
+ * exactly one property there is only one thing that value can mean, so wrap it
+ * rather than handing the client a scalar it will fail to destructure.
+ */
+function parseArgumentsToJsonString(raw, fn) {
+    let value = raw;
     if (typeof raw === 'string') {
-        // Model may already have emitted a JSON string; keep it if it parses.
         try {
-            JSON.parse(raw);
-            return raw;
+            value = JSON.parse(raw);
         }
         catch {
-            return JSON.stringify(raw);
+            value = raw; // Bare string — may still be wrappable below.
         }
     }
-    return JSON.stringify(raw ?? {});
+    if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+        return JSON.stringify(value);
+    }
+    if (value === undefined || value === null || value === '')
+        return '{}';
+    const properties = fn?.parameters?.properties;
+    const keys = properties && typeof properties === 'object' ? Object.keys(properties) : [];
+    if (keys.length === 1)
+        return JSON.stringify({ [keys[0]]: value });
+    // Ambiguous: hand it over unchanged rather than guessing a parameter name.
+    return JSON.stringify(value);
 }
-/** Render one assistant tool call as a `<tool_call>` block. */
+/**
+ * Render one assistant tool call as a `<tool_call>` block.
+ *
+ * The call id rides along so the model can pair a `<tool_response>` with the
+ * right call — otherwise two parallel calls to the same function come back as
+ * two indistinguishable results.
+ */
 function renderToolCall(tc) {
     let args = {};
     try {
@@ -130,7 +177,11 @@ function renderToolCall(tc) {
     catch {
         args = tc.function?.arguments ?? {};
     }
-    const payload = JSON.stringify({ name: tc.function?.name, arguments: args });
+    const payload = JSON.stringify({
+        ...(tc.id ? { id: tc.id } : {}),
+        name: tc.function?.name,
+        arguments: args,
+    });
     return `${TOOL_CALL_OPEN}\n${payload}\n${TOOL_CALL_CLOSE}`;
 }
 /**
@@ -164,7 +215,13 @@ export function renderToolMessages(messages) {
         }
         if (msg.role === 'tool') {
             const name = (msg.tool_call_id && callNames.get(msg.tool_call_id)) || msg.name;
-            const payload = name ? JSON.stringify({ name, result: text }) : text;
+            const payload = name || msg.tool_call_id
+                ? JSON.stringify({
+                    ...(msg.tool_call_id ? { id: msg.tool_call_id } : {}),
+                    ...(name ? { name } : {}),
+                    result: text,
+                })
+                : text;
             return {
                 role: 'tool',
                 content: `${TOOL_RESPONSE_OPEN}\n${payload}\n${TOOL_RESPONSE_CLOSE}`,
@@ -216,14 +273,18 @@ function findTagOutsideJsonString(text, tag) {
     return -1;
 }
 /**
- * Extract the first balanced JSON object from `text`, ignoring braces inside
- * strings. Lets a block parse even when the model appends stray text after the
- * payload or leaves the block unterminated.
+ * Extract the first balanced JSON object or array from `text`, ignoring
+ * brackets inside strings. Lets a block parse even when the model appends stray
+ * text after the payload or leaves the block unterminated.
  */
-function firstJsonObject(text) {
-    const start = text.indexOf('{');
+function firstJsonValue(text) {
+    const objectAt = text.indexOf('{');
+    const arrayAt = text.indexOf('[');
+    const start = objectAt === -1 ? arrayAt : arrayAt === -1 ? objectAt : Math.min(objectAt, arrayAt);
     if (start === -1)
         return null;
+    const openCh = text[start];
+    const closeCh = openCh === '{' ? '}' : ']';
     let depth = 0;
     let inString = false;
     let escaped = false;
@@ -240,12 +301,87 @@ function firstJsonObject(text) {
         }
         if (ch === '"')
             inString = true;
-        else if (ch === '{')
+        else if (ch === openCh)
             depth++;
-        else if (ch === '}' && --depth === 0)
+        else if (ch === closeCh && --depth === 0)
             return text.slice(start, i + 1);
     }
     return null;
+}
+/** Parse `text` as JSON, falling back to the first complete value embedded in it. */
+function parseJsonLoose(text) {
+    try {
+        return JSON.parse(text);
+    }
+    catch {
+        const candidate = firstJsonValue(text);
+        if (candidate === null)
+            return undefined;
+        try {
+            return JSON.parse(candidate);
+        }
+        catch {
+            return undefined;
+        }
+    }
+}
+function firstString(...values) {
+    for (const value of values) {
+        if (typeof value === 'string' && value)
+            return value;
+    }
+    return undefined;
+}
+function firstDefined(...values) {
+    for (const value of values) {
+        if (value !== undefined)
+            return value;
+    }
+    return undefined;
+}
+/**
+ * Turn one decoded JSON value into zero or more tool calls.
+ *
+ * Accepts every shape observed from the models this runs against: the canonical
+ * `{name, arguments}`, an OpenAI-style `{function: {name, arguments}}`, a bare
+ * array of either, and a `{tool_calls: [...]}` wrapper. Naming varies too —
+ * `tool_name` for the function, `parameters`/`args`/`input` for its arguments.
+ */
+function toToolCalls(value, lookup) {
+    if (Array.isArray(value)) {
+        return value.flatMap((entry) => toToolCalls(entry, lookup));
+    }
+    if (!value || typeof value !== 'object')
+        return [];
+    const obj = value;
+    for (const key of ['tool_calls', 'calls', 'invocations']) {
+        if (Array.isArray(obj[key])) {
+            return obj[key].flatMap((entry) => toToolCalls(entry, lookup));
+        }
+    }
+    const fn = obj.function;
+    const fnObj = fn && typeof fn === 'object' ? fn : undefined;
+    const name = firstString(obj.name, obj.tool_name, obj.tool, typeof fn === 'string' ? fn : undefined, fnObj?.name);
+    if (!name)
+        return [];
+    const rawArgs = firstDefined(obj.arguments, obj.parameters, obj.args, obj.input, fnObj?.arguments, fnObj?.parameters);
+    return [
+        {
+            id: generateToolCallId(),
+            type: 'function',
+            function: { name, arguments: parseArgumentsToJsonString(rawArgs, lookup?.get(name)) },
+        },
+    ];
+}
+/** True when `text` could still turn out to be a bare JSON tool call. */
+function looksLikeJsonStart(text) {
+    const trimmed = text.trimStart();
+    if (!trimmed)
+        return true; // only whitespace so far — undecided
+    if (trimmed.startsWith('{') || trimmed.startsWith('['))
+        return true;
+    // A fence may not have its language tag yet, so match progressively.
+    return '```json'.startsWith(trimmed.slice(0, 7)) && trimmed.startsWith('`');
 }
 /**
  * Incremental parser that separates assistant prose from `<tool_call>` blocks in
@@ -257,77 +393,91 @@ function firstJsonObject(text) {
  */
 export class ToolCallStreamParser {
     buffer = '';
-    inToolCall = false;
+    /** The tag pair that opened the block being accumulated, if any. */
+    openTag = null;
     calls = [];
+    lookup = new Map();
+    /** Content withheld while it might still turn out to be an untagged call. */
+    held = '';
+    /** Once open, content streams straight through with no further inspection. */
+    gateOpen;
+    constructor(options = {}) {
+        for (const tool of options.tools ?? []) {
+            if (tool?.function?.name)
+                this.lookup.set(tool.function.name, tool.function);
+        }
+        // With no schemas to match against, untagged JSON is just JSON.
+        this.gateOpen = this.lookup.size === 0;
+    }
     /** Feed the next decrypted text chunk. */
     push(chunk) {
         this.buffer += chunk;
-        let content = '';
+        let raw = '';
         const toolCalls = [];
         // Loop: a single chunk can close one block and open the next.
         for (;;) {
-            if (!this.inToolCall) {
-                const open = this.buffer.indexOf(TOOL_CALL_OPEN);
-                if (open === -1) {
+            if (!this.openTag) {
+                const opened = findFirst(this.buffer, (tag) => this.buffer.indexOf(tag.open));
+                if (!opened) {
                     // Hold back anything that might be the start of an opening tag.
-                    const hold = partialTagSuffixLength(this.buffer, TOOL_CALL_OPEN);
-                    content += this.buffer.slice(0, this.buffer.length - hold);
+                    const hold = maxPartialTagSuffix(this.buffer);
+                    raw += this.buffer.slice(0, this.buffer.length - hold);
                     this.buffer = hold ? this.buffer.slice(this.buffer.length - hold) : '';
                     break;
                 }
-                content += this.buffer.slice(0, open);
-                this.buffer = this.buffer.slice(open + TOOL_CALL_OPEN.length);
-                this.inToolCall = true;
+                raw += this.buffer.slice(0, opened.index);
+                this.buffer = this.buffer.slice(opened.index + opened.tag.open.length);
+                this.openTag = opened.tag;
             }
             else {
-                // A block ends at `</tool_call>` — or at the next `<tool_call>`, because
+                // A block ends at its closing tag — or at the next opening tag, because
                 // GLM emits parallel calls as `<tool_call>{..}<tool_call>{..}</tool_call>`,
                 // using the opening tag as a separator instead of closing each block.
-                const close = findTagOutsideJsonString(this.buffer, TOOL_CALL_CLOSE);
-                const nextOpen = findTagOutsideJsonString(this.buffer, TOOL_CALL_OPEN);
+                const close = findTagOutsideJsonString(this.buffer, this.openTag.close);
+                const chainedOpen = findFirst(this.buffer, (tag) => findTagOutsideJsonString(this.buffer, tag.open));
+                const nextOpen = chainedOpen ? chainedOpen.index : -1;
                 const closesFirst = close !== -1 && (nextOpen === -1 || close <= nextOpen);
-                const chained = nextOpen !== -1 && !closesFirst;
-                if (!closesFirst && !chained)
+                if (!closesFirst && nextOpen === -1)
                     break; // wait for the rest of the block
                 const end = closesFirst ? close : nextOpen;
-                const skip = closesFirst ? TOOL_CALL_CLOSE.length : TOOL_CALL_OPEN.length;
+                const skip = closesFirst ? this.openTag.close.length : chainedOpen.tag.open.length;
                 const block = this.buffer.slice(0, end);
                 this.buffer = this.buffer.slice(end + skip);
-                this.inToolCall = !closesFirst; // a chained tag opens the next block
-                const call = this.parseBlock(block);
-                if (call) {
-                    toolCalls.push(call);
-                    this.calls.push(call);
-                }
+                this.openTag = closesFirst ? null : chainedOpen.tag;
+                const calls = this.parseBlocks(block);
+                toolCalls.push(...calls);
+                this.calls.push(...calls);
             }
         }
-        return { content, toolCalls };
+        const gated = this.gate(raw, toolCalls.length > 0, false);
+        return { content: gated.content, toolCalls: [...toolCalls, ...gated.toolCalls] };
     }
     /**
-     * Finish the stream. Returns any trailing content still held back, plus a tool
-     * call recovered from an unterminated block if the model omitted the closing
+     * Finish the stream. Returns any trailing content still held back, plus tool
+     * calls recovered from an unterminated block if the model omitted the closing
      * tag (some models stop right after the JSON).
      */
     flush() {
         const toolCalls = [];
-        let content = '';
-        if (this.inToolCall) {
-            const call = this.parseBlock(this.buffer);
-            if (call) {
-                toolCalls.push(call);
-                this.calls.push(call);
+        let raw = '';
+        if (this.openTag) {
+            const calls = this.parseBlocks(this.buffer);
+            if (calls.length > 0) {
+                toolCalls.push(...calls);
+                this.calls.push(...calls);
             }
             else {
                 // Not parseable as a tool call — surface it rather than swallowing it.
-                content = TOOL_CALL_OPEN + this.buffer;
+                raw = this.openTag.open + this.buffer;
             }
         }
         else {
-            content = this.buffer;
+            raw = this.buffer;
         }
         this.buffer = '';
-        this.inToolCall = false;
-        return { content, toolCalls };
+        this.openTag = null;
+        const gated = this.gate(raw, toolCalls.length > 0, true);
+        return { content: gated.content, toolCalls: [...toolCalls, ...gated.toolCalls] };
     }
     /** Every tool call parsed so far. */
     get toolCalls() {
@@ -337,41 +487,80 @@ export class ToolCallStreamParser {
     get sawToolCall() {
         return this.calls.length > 0;
     }
-    parseBlock(block) {
+    /**
+     * Decide how much plain content may be released.
+     *
+     * A model that ignores the tag format and answers with the raw JSON payload is
+     * the most common way prompt-driven tool calling fails, so content that starts
+     * like JSON is withheld until it either completes into a call to a declared
+     * tool or proves to be something else. Everything else opens the gate on the
+     * first chunk and streams normally from then on.
+     */
+    gate(text, sawTaggedCall, atEnd) {
+        if (this.gateOpen)
+            return { content: text, toolCalls: [] };
+        // Tagged calls settle it: the model knows the format, so leading text is prose.
+        if (sawTaggedCall) {
+            this.gateOpen = true;
+            const content = this.held + text;
+            this.held = '';
+            return { content, toolCalls: [] };
+        }
+        this.held += text;
+        const release = () => {
+            this.gateOpen = true;
+            const content = this.held;
+            this.held = '';
+            return { content, toolCalls: [] };
+        };
+        if (!looksLikeJsonStart(this.held))
+            return release();
+        if (this.held.length > UNTAGGED_HOLD_LIMIT)
+            return release();
+        const candidate = firstJsonValue(stripFences(this.held));
+        if (candidate === null)
+            return atEnd ? release() : { content: '', toolCalls: [] };
+        const calls = this.parseBlocks(this.held).filter((call) => this.lookup.has(call.function.name));
+        if (calls.length === 0)
+            return release();
+        this.gateOpen = true;
+        this.held = '';
+        this.calls.push(...calls);
+        return { content: '', toolCalls: calls };
+    }
+    parseBlocks(block) {
         const text = stripFences(block);
         if (!text)
-            return null;
-        let parsed;
-        try {
-            parsed = JSON.parse(text);
-        }
-        catch {
-            const candidate = firstJsonObject(text);
-            if (!candidate)
-                return null;
-            try {
-                parsed = JSON.parse(candidate);
-            }
-            catch {
-                return null;
-            }
-        }
-        if (!parsed || typeof parsed.name !== 'string' || !parsed.name)
-            return null;
-        // Accept `parameters` as an alias some models emit.
-        const rawArgs = parsed.arguments !== undefined ? parsed.arguments : parsed.parameters;
-        return {
-            id: generateToolCallId(),
-            type: 'function',
-            function: { name: parsed.name, arguments: parseArgumentsToJsonString(rawArgs) },
-        };
+            return [];
+        const value = parseJsonLoose(text);
+        if (value === undefined)
+            return [];
+        return toToolCalls(value, this.lookup);
     }
+}
+/** Lowest non-negative index across all known tag pairs, with the tag that matched. */
+function findFirst(text, locate) {
+    let best = null;
+    for (const tag of TOOL_CALL_TAGS) {
+        const index = locate(tag);
+        if (index !== -1 && (best === null || index < best.index))
+            best = { index, tag };
+    }
+    return best;
+}
+/** Longest trailing run of `text` that could be the start of any opening tag. */
+function maxPartialTagSuffix(text) {
+    let longest = 0;
+    for (const tag of TOOL_CALL_TAGS) {
+        longest = Math.max(longest, partialTagSuffixLength(text, tag.open));
+    }
+    return longest;
 }
 /**
  * Parse a complete (non-streamed) response body into content plus tool calls.
  */
-export function parseToolCalls(text) {
-    const parser = new ToolCallStreamParser();
+export function parseToolCalls(text, options = {}) {
+    const parser = new ToolCallStreamParser(options);
     const a = parser.push(text);
     const b = parser.flush();
     return {

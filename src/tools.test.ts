@@ -245,6 +245,133 @@ describe('parseToolCalls', () => {
   });
 });
 
+describe('parseToolCalls with alternative shapes', () => {
+  it('accepts an OpenAI-shaped payload nested under function', () => {
+    const { toolCalls } = parseToolCalls(
+      block('{"function": {"name": "get_weather", "arguments": "{\\"city\\":\\"Bratislava\\"}"}}')
+    );
+    expect(toolCalls).toHaveLength(1);
+    expect(toolCalls[0].function.name).toBe('get_weather');
+    expect(JSON.parse(toolCalls[0].function.arguments)).toEqual({ city: 'Bratislava' });
+  });
+
+  it('accepts tool_name and args aliases', () => {
+    const { toolCalls } = parseToolCalls(block('{"tool_name":"a","args":{"x":1}}'));
+    expect(toolCalls[0].function.name).toBe('a');
+    expect(JSON.parse(toolCalls[0].function.arguments)).toEqual({ x: 1 });
+  });
+
+  it('splits an array of calls inside one block', () => {
+    const { toolCalls } = parseToolCalls(
+      block('[{"name":"a","arguments":{}},{"name":"b","arguments":{"x":1}}]')
+    );
+    expect(toolCalls.map((t) => t.function.name)).toEqual(['a', 'b']);
+  });
+
+  it('unwraps a tool_calls wrapper object', () => {
+    const { toolCalls } = parseToolCalls(
+      block('{"tool_calls":[{"name":"a","arguments":{}},{"name":"b","arguments":{}}]}')
+    );
+    expect(toolCalls.map((t) => t.function.name)).toEqual(['a', 'b']);
+  });
+
+  it('reads a <function_call> block', () => {
+    const { content, toolCalls } = parseToolCalls(
+      '<function_call>{"name":"get_weather","arguments":{"city":"Vienna"}}</function_call>'
+    );
+    expect(toolCalls).toHaveLength(1);
+    expect(toolCalls[0].function.name).toBe('get_weather');
+    expect(content).toBe('');
+  });
+
+  it('wraps a bare argument value using the single declared parameter', () => {
+    const { toolCalls } = parseToolCalls(block('{"name":"get_weather","arguments":"Bratislava"}'), {
+      tools: [weatherTool],
+    });
+    expect(JSON.parse(toolCalls[0].function.arguments)).toEqual({ city: 'Bratislava' });
+  });
+
+  it('leaves a bare argument alone when the schema is ambiguous', () => {
+    const twoParams: ToolDefinition = {
+      type: 'function',
+      function: {
+        name: 'move',
+        parameters: { type: 'object', properties: { x: {}, y: {} } },
+      },
+    };
+    const { toolCalls } = parseToolCalls(block('{"name":"move","arguments":"5"}'), {
+      tools: [twoParams],
+    });
+    expect(toolCalls[0].function.arguments).toBe('5');
+  });
+
+  it('treats missing arguments as an empty object', () => {
+    const { toolCalls } = parseToolCalls(block('{"name":"ping"}'));
+    expect(toolCalls[0].function.arguments).toBe('{}');
+  });
+});
+
+describe('untagged tool calls', () => {
+  it('recovers a bare JSON call that names a declared tool', () => {
+    const { content, toolCalls } = parseToolCalls(
+      '{"name": "get_weather", "arguments": {"city": "Bratislava"}}',
+      { tools: [weatherTool] }
+    );
+    expect(toolCalls).toHaveLength(1);
+    expect(toolCalls[0].function.name).toBe('get_weather');
+    expect(content).toBe('');
+  });
+
+  it('recovers a bare JSON call wrapped in a markdown fence', () => {
+    const { toolCalls } = parseToolCalls(
+      '```json\n{"name": "get_weather", "arguments": {"city": "Vienna"}}\n```',
+      { tools: [weatherTool] }
+    );
+    expect(toolCalls).toHaveLength(1);
+  });
+
+  it('leaves a JSON answer alone when it names no declared tool', () => {
+    const text = '{"answer": 42}';
+    const { content, toolCalls } = parseToolCalls(text, { tools: [weatherTool] });
+    expect(toolCalls).toHaveLength(0);
+    expect(content).toBe(text);
+  });
+
+  it('does not hunt for untagged calls when no tools are declared', () => {
+    const text = '{"name": "get_weather", "arguments": {"city": "Bratislava"}}';
+    const { content, toolCalls } = parseToolCalls(text);
+    expect(toolCalls).toHaveLength(0);
+    expect(content).toBe(text);
+  });
+
+  it('streams prose unchanged when tools are declared', () => {
+    const parser = new ToolCallStreamParser({ tools: [weatherTool] });
+    const first = parser.push('It is sunny ');
+    const second = parser.push('in Bratislava.');
+    expect(first.content + second.content + parser.flush().content).toBe(
+      'It is sunny in Bratislava.'
+    );
+  });
+
+  it('assembles an untagged call split across chunks', () => {
+    const parser = new ToolCallStreamParser({ tools: [weatherTool] });
+    const chunks = ['{"name": "get_', 'weather", "argum', 'ents": {"city": "Br', 'atislava"}}'];
+    const calls = chunks.flatMap((c) => parser.push(c).toolCalls);
+    const tail = parser.flush();
+    expect([...calls, ...tail.toolCalls]).toHaveLength(1);
+    expect(tail.content).toBe('');
+  });
+
+  it('prefers the tagged form when the model uses it after prose', () => {
+    const { content, toolCalls } = parseToolCalls(
+      `{ is a brace. Now:\n${block('{"name":"get_weather","arguments":{"city":"Vienna"}}')}`,
+      { tools: [weatherTool] }
+    );
+    expect(toolCalls).toHaveLength(1);
+    expect(content).toContain('{ is a brace.');
+  });
+});
+
 describe('ToolCallStreamParser', () => {
   it('never emits a partially-received opening tag as content', () => {
     const parser = new ToolCallStreamParser();

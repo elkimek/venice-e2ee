@@ -104,6 +104,15 @@ export interface ParseResult {
     /** Tool calls completed by this push. */
     toolCalls: ToolCall[];
 }
+export interface ToolParserOptions {
+    /**
+     * The tools offered to the model. Supplying them buys two things: arguments
+     * get coerced against the declared schema, and a reply that is a bare JSON
+     * call with no tags at all can be recognised — but only when it names a tool
+     * that was actually offered, so ordinary JSON answers stay content.
+     */
+    tools?: ToolDefinition[];
+}
 /**
  * Incremental parser that separates assistant prose from `<tool_call>` blocks in
  * a streaming response.
@@ -114,13 +123,20 @@ export interface ParseResult {
  */
 export declare class ToolCallStreamParser {
     private buffer;
-    private inToolCall;
+    /** The tag pair that opened the block being accumulated, if any. */
+    private openTag;
     private calls;
+    private lookup;
+    /** Content withheld while it might still turn out to be an untagged call. */
+    private held;
+    /** Once open, content streams straight through with no further inspection. */
+    private gateOpen;
+    constructor(options?: ToolParserOptions);
     /** Feed the next decrypted text chunk. */
     push(chunk: string): ParseResult;
     /**
-     * Finish the stream. Returns any trailing content still held back, plus a tool
-     * call recovered from an unterminated block if the model omitted the closing
+     * Finish the stream. Returns any trailing content still held back, plus tool
+     * calls recovered from an unterminated block if the model omitted the closing
      * tag (some models stop right after the JSON).
      */
     flush(): ParseResult;
@@ -128,10 +144,20 @@ export declare class ToolCallStreamParser {
     get toolCalls(): ToolCall[];
     /** True once any tool call has been parsed (drives `finish_reason`). */
     get sawToolCall(): boolean;
-    private parseBlock;
+    /**
+     * Decide how much plain content may be released.
+     *
+     * A model that ignores the tag format and answers with the raw JSON payload is
+     * the most common way prompt-driven tool calling fails, so content that starts
+     * like JSON is withheld until it either completes into a call to a declared
+     * tool or proves to be something else. Everything else opens the gate on the
+     * first chunk and streams normally from then on.
+     */
+    private gate;
+    private parseBlocks;
 }
 /**
  * Parse a complete (non-streamed) response body into content plus tool calls.
  */
-export declare function parseToolCalls(text: string): ParseResult;
+export declare function parseToolCalls(text: string, options?: ToolParserOptions): ParseResult;
 //# sourceMappingURL=tools.d.ts.map
