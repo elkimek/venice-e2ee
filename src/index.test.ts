@@ -44,5 +44,23 @@ describe('createVeniceE2EE.encrypt', () => {
       content: expect.any(String),
     });
     expect(payload.encryptedMessages[0].content).not.toContain('secret');
+
+    const toolPayload = await e2ee.encrypt(
+      [
+        {
+          role: 'tool',
+          content: 'tool result',
+          tool_call_id: 'call_required_by_venice',
+          name: 'secret_function',
+        },
+      ],
+      session
+    );
+    expect(toolPayload.encryptedMessages[0]).toEqual({
+      role: 'tool',
+      content: expect.any(String),
+      tool_call_id: 'call_required_by_venice',
+    });
+    expect(toolPayload.encryptedMessages[0].content).not.toContain('secret_function');
   });
 });

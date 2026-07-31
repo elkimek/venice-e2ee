@@ -96,6 +96,7 @@ export declare function buildToolSystemPrompt(tools: ToolDefinition[], toolChoic
 export declare function renderToolMessages(messages: ToolChatMessage[]): Array<{
     role: string;
     content: string;
+    tool_call_id?: string;
 }>;
 export interface ParseResult {
     /** Text safe to forward to the client as assistant content. */

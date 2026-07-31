@@ -194,7 +194,7 @@ function renderToolCall(tc: ToolCall): string {
  */
 export function renderToolMessages(
   messages: ToolChatMessage[]
-): Array<{ role: string; content: string }> {
+): Array<{ role: string; content: string; tool_call_id?: string }> {
   // tool_call_id -> function name, collected from earlier assistant turns.
   const callNames = new Map<string, string>();
   for (const msg of messages) {
@@ -219,6 +219,7 @@ export function renderToolMessages(
       return {
         role: 'tool',
         content: `${TOOL_RESPONSE_OPEN}\n${payload}\n${TOOL_RESPONSE_CLOSE}`,
+        ...(msg.tool_call_id ? { tool_call_id: msg.tool_call_id } : {}),
       };
     }
 

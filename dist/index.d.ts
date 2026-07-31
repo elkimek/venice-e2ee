@@ -5,6 +5,7 @@ export declare function createVeniceE2EE(options: VeniceE2EEOptions): {
     encrypt: (messages: Array<{
         role: string;
         content?: string | ContentPart[] | null;
+        tool_call_id?: string;
         [key: string]: unknown;
     }>, session: E2EESession) => Promise<EncryptedPayload>;
     decryptChunk: (hexChunk: string, session: E2EESession) => Promise<string>;

@@ -106,6 +106,7 @@ export function createVeniceE2EE(options: VeniceE2EEOptions) {
     messages: Array<{
       role: string;
       content?: string | ContentPart[] | null;
+      tool_call_id?: string;
       [key: string]: unknown;
     }>,
     session: E2EESession
@@ -114,14 +115,21 @@ export function createVeniceE2EE(options: VeniceE2EEOptions) {
     // a request with any plaintext message content ("E2EE decryption failed"),
     // so the whole conversation stays ciphertext end to end.
     const encryptedMessages = await Promise.all(
-      messages.map(async ({ role, content }) => ({
-        role,
-        content: await encryptMessage(
-          session.aesKey,
-          session.publicKey,
-          flattenMessageContent(content)
-        ),
-      }))
+      messages.map(async ({ role, content, tool_call_id }) => {
+        const encrypted: { role: string; content: string; tool_call_id?: string } = {
+          role,
+          content: await encryptMessage(
+            session.aesKey,
+            session.publicKey,
+            flattenMessageContent(content)
+          ),
+        };
+        // Venice requires this opaque correlation ID on tool-role messages.
+        if (role === 'tool' && tool_call_id !== undefined) {
+          encrypted.tool_call_id = tool_call_id;
+        }
+        return encrypted;
+      })
     );
 
     return {

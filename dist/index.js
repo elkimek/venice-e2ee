@@ -70,10 +70,17 @@ export function createVeniceE2EE(options) {
         // Every role must be encrypted, assistant and tool included: the TEE rejects
         // a request with any plaintext message content ("E2EE decryption failed"),
         // so the whole conversation stays ciphertext end to end.
-        const encryptedMessages = await Promise.all(messages.map(async ({ role, content }) => ({
-            role,
-            content: await encryptMessage(session.aesKey, session.publicKey, flattenMessageContent(content)),
-        })));
+        const encryptedMessages = await Promise.all(messages.map(async ({ role, content, tool_call_id }) => {
+            const encrypted = {
+                role,
+                content: await encryptMessage(session.aesKey, session.publicKey, flattenMessageContent(content)),
+            };
+            // Venice requires this opaque correlation ID on tool-role messages.
+            if (role === 'tool' && tool_call_id !== undefined) {
+                encrypted.tool_call_id = tool_call_id;
+            }
+            return encrypted;
+        }));
         return {
             encryptedMessages,
             headers: {

@@ -168,6 +168,7 @@ export function renderToolMessages(messages) {
             return {
                 role: 'tool',
                 content: `${TOOL_RESPONSE_OPEN}\n${payload}\n${TOOL_RESPONSE_CLOSE}`,
+                ...(msg.tool_call_id ? { tool_call_id: msg.tool_call_id } : {}),
             };
         }
         return { role: msg.role, content: text };

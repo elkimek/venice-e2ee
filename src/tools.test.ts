@@ -88,7 +88,7 @@ describe('renderToolMessages', () => {
     ]);
     expect(rendered[1].content).toContain('get_weather');
     expect(rendered[1].content).toContain('{\\"temp\\":18}');
-    expect((rendered[1] as Record<string, unknown>).tool_call_id).toBeUndefined();
+    expect(rendered[1].tool_call_id).toBe('call_1');
   });
 
   it('leaves ordinary messages untouched', () => {
