@@ -7,6 +7,7 @@ import {
 } from './crypto.js';
 import { decryptSSEStream } from './stream.js';
 import { flattenMessageContent, type ContentPart } from './tools.js';
+import type { SignatureResponse } from './receipt.js';
 import {
   verifyAttestation,
   type AttestationResponse,
@@ -157,6 +158,33 @@ export function createVeniceE2EE(options: VeniceE2EEOptions) {
     yield* decryptSSEStream(body, session.privateKey);
   }
 
+  /**
+   * Fetch the signed receipt for a completion.
+   *
+   * `requestId` is Venice's completion `id`, not one a client made up. Pair the
+   * result with {@link verifyReceipt} and the attestation from the same model to
+   * prove the completion came from the attested enclave.
+   */
+  async function fetchResponseSignature(
+    modelId: string,
+    requestId: string
+  ): Promise<SignatureResponse> {
+    const url =
+      `${baseUrl}/api/v1/tee/signature?model=${encodeURIComponent(modelId)}` +
+      `&request_id=${encodeURIComponent(requestId)}`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+    if (!res.ok) {
+      throw new Error(`TEE signature fetch failed (${res.status}): ${await res.text()}`);
+    }
+    return res.json() as Promise<SignatureResponse>;
+  }
+
+  /** The raw attestation response for a model, without deriving E2EE keys. */
+  async function attest(modelId: string): Promise<AttestationResponse> {
+    const { response } = await fetchAttestation(modelId);
+    return response;
+  }
+
   function clearSession(): void {
     if (_session) {
       _session.privateKey.fill(0);
@@ -166,9 +194,11 @@ export function createVeniceE2EE(options: VeniceE2EEOptions) {
 
   return {
     createSession,
+    attest,
     encrypt,
     decryptChunk: decrypt,
     decryptStream,
+    fetchResponseSignature,
     clearSession,
   };
 }
@@ -180,6 +210,22 @@ export function isE2EEModel(modelId: string): boolean {
 export type { VeniceE2EEOptions, E2EESession, EncryptedPayload, DcapVerifier, DcapVerifyResult } from './types.js';
 export type { AttestationResponse, AttestationResult, ServerVerification } from './attestation.js';
 export { verifyAttestation, deriveEthAddress } from './attestation.js';
+export {
+  verifyReceipt,
+  receiptSigningBytes,
+  jcsStringify,
+  sha256Prefixed,
+} from './receipt.js';
+export type {
+  Receipt,
+  ReceiptEvent,
+  ReceiptCheck,
+  ReceiptVerification,
+  SignatureResponse,
+  WorkloadKeyset,
+  KeysetKey,
+  VerifyReceiptOptions,
+} from './receipt.js';
 export {
   generateKeypair,
   deriveAESKey,
