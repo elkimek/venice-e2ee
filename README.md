@@ -193,6 +193,22 @@ good deal more than the format the prompt asks for:
   `options.tools`, so a model asked to answer in JSON still returns JSON
 - a lone argument passed bare (`"arguments": "Bratislava"`), wrapped using the schema when
   the function declares exactly one parameter
+- **GLM's native `<arg_key>`/`<arg_value>` body**, including the degenerate forms it
+  actually produces. GLM was trained on that template and uses the same `<tool_call>` tag
+  this prompt asks for, so it blends the two and the tags come out lossy — a different
+  subset survives each time. All of these are verbatim from `e2ee-glm-5-2-p` and all parse:
+
+  ```
+  <tool_call>read</arg_value>filePath</arg_key><arg_value>/Users/juraj/…</arg_value></tool_call>
+  <tool_call>glob<arg_key>pattern "**/opencode.json"</arg_value></tool_call>
+  ```
+
+- the same body with the tags gone entirely and only their contents left, one per line.
+  Nothing marks that as a call rather than prose, so it is accepted only when the first
+  line names a tool in `options.tools` and every key is one of its declared properties.
+
+A block that yields no call is never discarded — it comes back as visible content, tags
+and all. Losing it silently costs the caller the whole turn with nothing to debug.
 
 Passing `tools` is what enables the last two; without it the parser still works, but only
 on tagged blocks and without argument coercion.

@@ -373,6 +373,162 @@ function toToolCalls(value, lookup) {
         },
     ];
 }
+/**
+ * Parse GLM's native tool-call body: a bare function name followed by
+ * `<arg_key>`/`<arg_value>` pairs.
+ *
+ * ```
+ * <tool_call>read
+ * <arg_key>filePath</arg_key>
+ * <arg_value>"/etc/hosts"</arg_value>
+ * </tool_call>
+ * ```
+ *
+ * GLM is trained on this template and reaches for it over the JSON body the
+ * system prompt asks for — the more tools and the longer the prompt, the more
+ * often. It uses the same `<tool_call>` tag either way, so the block is found
+ * and then fails to yield a call unless this form is understood too.
+ *
+ * Values are JSON when the model is being careful (`"/etc/hosts"`, `3`, `true`)
+ * and bare text when it is not, so each is parsed as JSON with a raw-string
+ * fallback.
+ */
+function parseArgValue(raw) {
+    const trimmed = raw.trim();
+    try {
+        return JSON.parse(trimmed);
+    }
+    catch {
+        // An opening quote with no closing one is a truncated JSON string, not a
+        // value that happens to start with a quote.
+        return trimmed.length > 1 && trimmed.startsWith('"') && !trimmed.endsWith('"')
+            ? trimmed.slice(1)
+            : trimmed;
+    }
+}
+const ARG_TAG = /<\/?arg_(?:key|value)>/g;
+const FUNCTION_NAME = /^[A-Za-z_][\w.-]*$/;
+function parseArgKeyValueBody(text, lookup) {
+    ARG_TAG.lastIndex = 0;
+    const firstTag = ARG_TAG.exec(text);
+    if (!firstTag)
+        return [];
+    const name = text.slice(0, firstTag.index).trim();
+    if (!FUNCTION_NAME.test(name))
+        return [];
+    // Walk (tag, text-after-tag) pairs rather than matching key/value as a unit.
+    // The observed output does not keep the tags paired: GLM emits
+    // `<arg_key>pattern "**/x.json"</arg_value>` with the key and value run
+    // together and the intervening tags missing entirely.
+    const args = {};
+    let pendingKey = null;
+    const cleanKey = (key) => key.trim().replace(/^"|"$/g, '');
+    const takeKey = (segment) => {
+        const trimmed = segment.trim();
+        if (!trimmed)
+            return;
+        // A key cannot contain whitespace, so anything after the first gap is the
+        // value that lost its own tag.
+        const gap = trimmed.search(/\s/);
+        if (gap !== -1) {
+            args[cleanKey(trimmed.slice(0, gap))] = parseArgValue(trimmed.slice(gap + 1));
+            pendingKey = null;
+            return;
+        }
+        // No gap, but a colon means the model started emitting the JSON body inside
+        // the tag — `filePath":"/etc/hosts"`. A real key never contains one.
+        const colon = trimmed.indexOf(':');
+        if (colon !== -1) {
+            const key = cleanKey(trimmed.slice(0, colon));
+            if (key) {
+                args[key] = parseArgValue(trimmed.slice(colon + 1));
+                pendingKey = null;
+                return;
+            }
+        }
+        pendingKey = cleanKey(trimmed);
+    };
+    ARG_TAG.lastIndex = firstTag.index;
+    for (let tag = ARG_TAG.exec(text); tag !== null;) {
+        const start = ARG_TAG.lastIndex;
+        const next = ARG_TAG.exec(text);
+        const segment = text.slice(start, next ? next.index : text.length);
+        if (tag[0] === '<arg_value>') {
+            if (pendingKey !== null) {
+                args[pendingKey] = parseArgValue(segment);
+                pendingKey = null;
+            }
+        }
+        else if (tag[0] === '<arg_key>' || pendingKey === null) {
+            // Closing tags should be followed by nothing, but when the opening tag is
+            // the one that went missing this is where the key turns up.
+            takeKey(segment);
+        }
+        tag = next;
+    }
+    if (Object.keys(args).length === 0)
+        return [];
+    return [
+        {
+            id: generateToolCallId(),
+            type: 'function',
+            function: { name, arguments: parseArgumentsToJsonString(args, lookup?.get(name)) },
+        },
+    ];
+}
+/**
+ * Last-resort form: the tags are gone entirely and only their contents survive,
+ * one per line.
+ *
+ * ```
+ * <tool_call>glob
+ * pattern
+ * ** /opencode.json
+ * path
+ * /Users/juraj/.config/opencode
+ * </tool_call>
+ * ```
+ *
+ * Nothing here marks it as a call rather than prose, so this only fires when the
+ * schemas confirm it: the first line must name a declared tool and every key
+ * line must be one of that tool's declared properties. Without `tools` it never
+ * fires at all.
+ */
+function parseLineDelimitedBody(text, lookup) {
+    if (!lookup || lookup.size === 0)
+        return [];
+    const lines = text
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean);
+    if (lines.length < 3)
+        return [];
+    const name = lines[0];
+    const fn = lookup.get(name);
+    if (!fn)
+        return [];
+    const rest = lines.slice(1);
+    if (rest.length % 2 !== 0)
+        return [];
+    const properties = fn.parameters?.properties;
+    if (!properties || typeof properties !== 'object')
+        return [];
+    const declared = new Set(Object.keys(properties));
+    const args = {};
+    for (let i = 0; i < rest.length; i += 2) {
+        const key = rest[i];
+        if (!declared.has(key))
+            return [];
+        args[key] = parseArgValue(rest[i + 1]);
+    }
+    return [
+        {
+            id: generateToolCallId(),
+            type: 'function',
+            function: { name, arguments: parseArgumentsToJsonString(args, fn) },
+        },
+    ];
+}
 /** True when `text` could still turn out to be a bare JSON tool call. */
 function looksLikeJsonStart(text) {
     const trimmed = text.trimStart();
@@ -442,11 +598,20 @@ export class ToolCallStreamParser {
                 const end = closesFirst ? close : nextOpen;
                 const skip = closesFirst ? this.openTag.close.length : chainedOpen.tag.open.length;
                 const block = this.buffer.slice(0, end);
+                const consumed = this.openTag;
                 this.buffer = this.buffer.slice(end + skip);
                 this.openTag = closesFirst ? null : chainedOpen.tag;
                 const calls = this.parseBlocks(block);
-                toolCalls.push(...calls);
-                this.calls.push(...calls);
+                if (calls.length > 0) {
+                    toolCalls.push(...calls);
+                    this.calls.push(...calls);
+                }
+                else {
+                    // A block that yields nothing must not vanish. Dropping it silently
+                    // costs the caller the whole turn with no way to tell what happened,
+                    // so put it back as content and let the failure be visible.
+                    raw += consumed.open + block + (closesFirst ? consumed.close : '');
+                }
             }
         }
         const gated = this.gate(raw, toolCalls.length > 0, false);
@@ -461,7 +626,15 @@ export class ToolCallStreamParser {
         const toolCalls = [];
         let raw = '';
         if (this.openTag) {
-            const calls = this.parseBlocks(this.buffer);
+            // The block never closed as far as the string-aware scan could tell, but
+            // that scan is defeated by an unbalanced quote in a non-JSON body — GLM's
+            // `<arg_value>"/etc/hosts</arg_value>` for instance. Nothing more is
+            // coming, so trust a plain text match for the terminator now.
+            let block = this.buffer;
+            const plainClose = this.buffer.indexOf(this.openTag.close);
+            if (plainClose !== -1)
+                block = this.buffer.slice(0, plainClose);
+            const calls = this.parseBlocks(block);
             if (calls.length > 0) {
                 toolCalls.push(...calls);
                 this.calls.push(...calls);
@@ -532,10 +705,17 @@ export class ToolCallStreamParser {
         const text = stripFences(block);
         if (!text)
             return [];
+        // JSON is the canonical body, so try it first.
         const value = parseJsonLoose(text);
-        if (value === undefined)
-            return [];
-        return toToolCalls(value, this.lookup);
+        if (value !== undefined) {
+            const calls = toToolCalls(value, this.lookup);
+            if (calls.length > 0)
+                return calls;
+        }
+        const tagged = parseArgKeyValueBody(text, this.lookup);
+        if (tagged.length > 0)
+            return tagged;
+        return parseLineDelimitedBody(text, this.lookup);
     }
 }
 /** Lowest non-negative index across all known tag pairs, with the tag that matched. */

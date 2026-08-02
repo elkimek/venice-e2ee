@@ -311,6 +311,208 @@ describe('parseToolCalls with alternative shapes', () => {
   });
 });
 
+describe("GLM's native arg_key/arg_value body", () => {
+  // GLM is trained on this template and falls back to it over the JSON body the
+  // system prompt asks for, using the same <tool_call> tag either way.
+  const readTool: ToolDefinition = {
+    type: 'function',
+    function: {
+      name: 'read',
+      description: 'Read a file',
+      parameters: {
+        type: 'object',
+        properties: { filePath: { type: 'string' }, limit: { type: 'number' } },
+        required: ['filePath'],
+      },
+    },
+  };
+
+  const native = (body: string) => `${TOOL_CALL_OPEN}${body}${TOOL_CALL_CLOSE}`;
+
+  it('parses a single argument', () => {
+    const { content, toolCalls } = parseToolCalls(
+      native('read\n<arg_key>filePath</arg_key>\n<arg_value>"/etc/hosts"</arg_value>\n'),
+      { tools: [readTool] }
+    );
+    expect(toolCalls).toHaveLength(1);
+    expect(toolCalls[0].function.name).toBe('read');
+    expect(JSON.parse(toolCalls[0].function.arguments)).toEqual({ filePath: '/etc/hosts' });
+    expect(content).toBe('');
+  });
+
+  it('parses several arguments and keeps their JSON types', () => {
+    const { toolCalls } = parseToolCalls(
+      native(
+        'read\n<arg_key>filePath</arg_key>\n<arg_value>"/etc/hosts"</arg_value>\n' +
+          '<arg_key>limit</arg_key>\n<arg_value>10</arg_value>\n'
+      ),
+      { tools: [readTool] }
+    );
+    expect(JSON.parse(toolCalls[0].function.arguments)).toEqual({ filePath: '/etc/hosts', limit: 10 });
+  });
+
+  it('accepts a value the model left unquoted', () => {
+    const { toolCalls } = parseToolCalls(
+      native('read\n<arg_key>filePath</arg_key>\n<arg_value>/etc/hosts</arg_value>\n'),
+      { tools: [readTool] }
+    );
+    expect(JSON.parse(toolCalls[0].function.arguments)).toEqual({ filePath: '/etc/hosts' });
+  });
+
+  it('recovers a value whose closing quote is missing', () => {
+    // An unbalanced quote also defeats the string-aware scan for the closing
+    // tag, so this exercises the end-of-stream fallback as well.
+    const { toolCalls } = parseToolCalls(
+      native('read\n<arg_key>filePath</arg_key>\n<arg_value>"/etc/hosts</arg_value>\n'),
+      { tools: [readTool] }
+    );
+    expect(toolCalls).toHaveLength(1);
+    expect(JSON.parse(toolCalls[0].function.arguments)).toEqual({ filePath: '/etc/hosts' });
+  });
+
+  it('recovers a block with no closing tag', () => {
+    const { toolCalls } = parseToolCalls(
+      `${TOOL_CALL_OPEN}read\n<arg_key>filePath</arg_key>\n<arg_value>"/etc/hosts"</arg_value>`,
+      { tools: [readTool] }
+    );
+    expect(JSON.parse(toolCalls[0].function.arguments)).toEqual({ filePath: '/etc/hosts' });
+  });
+
+  it('reassembles a native call split across stream chunks', () => {
+    const parser = new ToolCallStreamParser({ tools: [readTool] });
+    const chunks = [
+      '<tool_c',
+      'all>read\n<arg_k',
+      'ey>filePath</arg_key>\n<arg_val',
+      'ue>"/etc/hosts"</arg_value>\n</tool_',
+      'call>',
+    ];
+    const calls = chunks.flatMap((c) => parser.push(c).toolCalls);
+    const tail = parser.flush();
+    expect([...calls, ...tail.toolCalls]).toHaveLength(1);
+    expect(tail.content).toBe('');
+  });
+
+  it('works without declared tools', () => {
+    const { toolCalls } = parseToolCalls(
+      native('read\n<arg_key>filePath</arg_key>\n<arg_value>"/etc/hosts"</arg_value>\n')
+    );
+    expect(toolCalls).toHaveLength(1);
+    expect(toolCalls[0].function.name).toBe('read');
+  });
+
+  it('picks the right function out of a large tool set', () => {
+    const many: ToolDefinition[] = ['bash', 'edit', 'glob', 'grep', 'list', 'read', 'write'].map(
+      (name) => ({
+        type: 'function',
+        function: {
+          name,
+          parameters: { type: 'object', properties: { filePath: { type: 'string' } } },
+        },
+      })
+    );
+    const { toolCalls } = parseToolCalls(
+      native('grep\n<arg_key>filePath</arg_key>\n<arg_value>"src/tools.ts"</arg_value>\n'),
+      { tools: many }
+    );
+    expect(toolCalls[0].function.name).toBe('grep');
+  });
+
+  it('does not mistake prose containing angle brackets for a call', () => {
+    const { toolCalls, content } = parseToolCalls(
+      native('this is not a call at all\n'),
+      { tools: [readTool] }
+    );
+    expect(toolCalls).toHaveLength(0);
+    expect(content).toContain('this is not a call at all');
+  });
+
+  it('ignores a block with no arg tags even when it contains a colon', () => {
+    const { toolCalls, content } = parseToolCalls(native('\nnote: not a call\n'), {
+      tools: [readTool],
+    });
+    expect(toolCalls).toHaveLength(0);
+    expect(content).toContain('note: not a call');
+  });
+
+  describe('degenerate output captured from live GLM 5.2 over E2EE', () => {
+    // GLM half-blends its native template with the JSON body the prompt asks
+    // for, and the tags come out lossy — a different subset survives each time.
+    // These are verbatim shapes seen in production, not hypotheticals.
+    const globTool: ToolDefinition = {
+      type: 'function',
+      function: {
+        name: 'glob',
+        parameters: {
+          type: 'object',
+          properties: { pattern: { type: 'string' }, path: { type: 'string' } },
+          required: ['pattern'],
+        },
+      },
+    };
+
+    it('key and value run together, closed by a stray </arg_value>', () => {
+      const { toolCalls } = parseToolCalls(
+        '<tool_call>glob<arg_key>pattern "**/opencode.json"</arg_value></tool_call>',
+        { tools: [globTool] }
+      );
+      expect(toolCalls).toHaveLength(1);
+      expect(toolCalls[0].function.name).toBe('glob');
+      expect(JSON.parse(toolCalls[0].function.arguments)).toEqual({ pattern: '**/opencode.json' });
+    });
+
+    it('opening arg_key missing, keys trailing the closing tags', () => {
+      const { toolCalls } = parseToolCalls(
+        '<tool_call>glob</arg_value>pattern</arg_key><arg_value>**/opencode.json</arg_value>' +
+          '<arg_key>path</arg_key><arg_value>/Users/juraj/.config/opencode</arg_value></tool_call>',
+        { tools: [globTool] }
+      );
+      expect(toolCalls).toHaveLength(1);
+      expect(JSON.parse(toolCalls[0].function.arguments)).toEqual({
+        pattern: '**/opencode.json',
+        path: '/Users/juraj/.config/opencode',
+      });
+    });
+
+    it('JSON body leaking into the arg_key tag', () => {
+      const { toolCalls } = parseToolCalls(
+        '<tool_call>read<arg_key>filePath":"/Users/juraj/.config/opencode/opencode.json"</arg_value></tool_call>',
+        { tools: [readTool] }
+      );
+      expect(toolCalls).toHaveLength(1);
+      expect(JSON.parse(toolCalls[0].function.arguments)).toEqual({
+        filePath: '/Users/juraj/.config/opencode/opencode.json',
+      });
+    });
+  });
+});
+
+describe('blocks that yield no call', () => {
+  it('surfaces a closed but unparseable block as content', () => {
+    // Regression: the block used to be consumed and dropped, costing the caller
+    // the entire turn with nothing to show for it.
+    const { content, toolCalls } = parseToolCalls(block('what even is this'));
+    expect(toolCalls).toHaveLength(0);
+    expect(content).toContain('what even is this');
+    expect(content).toContain(TOOL_CALL_OPEN);
+    expect(content).toContain(TOOL_CALL_CLOSE);
+  });
+
+  it('surfaces an unparseable block while streaming, not only at flush', () => {
+    const parser = new ToolCallStreamParser();
+    const pushed = parser.push(`${block('nonsense')}and then prose`);
+    expect(pushed.toolCalls).toHaveLength(0);
+    expect(pushed.content).toContain('nonsense');
+    expect(pushed.content).toContain('and then prose');
+  });
+
+  it('keeps prose around a dropped block in order', () => {
+    const { content } = parseToolCalls(`before ${block('nope')} after`);
+    expect(content.indexOf('before')).toBeLessThan(content.indexOf('nope'));
+    expect(content.indexOf('nope')).toBeLessThan(content.indexOf('after'));
+  });
+});
+
 describe('untagged tool calls', () => {
   it('recovers a bare JSON call that names a declared tool', () => {
     const { content, toolCalls } = parseToolCalls(
