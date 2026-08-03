@@ -6,7 +6,7 @@ Extract Venice AI's end-to-end encryption into a standalone, reusable library. C
 
 ## What Venice E2EE Does
 
-Venice AI runs LLM inference inside AMD SEV-SNP TEEs (Trusted Execution Environments). The E2EE protocol ensures prompts are encrypted client-side and only decrypted inside the TEE — Venice never sees plaintext.
+Venice AI advertises LLM inference inside Intel TDX TEEs (Trusted Execution Environments). The E2EE protocol encrypts message content client-side to a public key carried in TDX attestation evidence. Surrounding request metadata remains visible to Venice.
 
 Protocol: ECDH (secp256k1) key exchange → HKDF-SHA256 key derivation → AES-256-GCM encryption. Streaming responses use per-chunk ephemeral keys (each chunk has its own server ephemeral pubkey + nonce + ciphertext).
 
@@ -59,19 +59,21 @@ e2ee.clearSession();
 
 Venice runs on **Intel TDX** (not AMD SEV-SNP). The attestation endpoint returns a TDX DCAP v4 quote (~5010 bytes) with a PCK certificate chain. TEE provider is NEAR AI Cloud using dstack framework.
 
-**v1 — Quote parsing + binding checks:**
+**Implemented — Quote parsing + binding checks:**
 1. Parse TDX quote binary, verify client nonce in REPORTDATA (bytes 32-64)
 2. Verify signing key's Ethereum address in REPORTDATA (bytes 0-20)
 3. Reject debug-mode TEEs (TDATTRIBUTES.TUD.DEBUG bit)
 4. Cross-check Venice's `server_verification` field
 
-**v2 — Full client-side TDX verification:**
-1. Extract PCK cert chain from quote, verify up to pinned Intel SGX Root CA
-2. Verify QE Report + Quote signatures (ECDSA P-256, browser-native via Web Crypto)
-3. ~500-800 lines, no WASM needed
+**Implemented as an opt-in policy — Full client-side TDX verification:**
+1. `createDcapVerifier()` delegates certificate, signature, collateral, CRL, and TCB validation to `@phala/dcap-qvl`
+2. `requireDcap: true` makes its success mandatory
+3. Parsed TDX measurements are exposed and caller-provided allowlists can be enforced
 
-**v3 — Complete:**
-1. CRL checking, TCB evaluation, NVIDIA GPU attestation, event log replay, measurement whitelisting
+**Still outside the implemented guarantees:**
+1. NVIDIA GPU attestation and event-log replay
+2. A Venice-published measurement allowlist
+3. Cryptographic binding of streaming response ephemeral keys to the attested signing key
 
 ## Build
 

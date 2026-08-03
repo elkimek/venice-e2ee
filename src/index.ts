@@ -28,7 +28,13 @@ export function createVeniceE2EE(options: VeniceE2EEOptions) {
     sessionTTL = DEFAULT_SESSION_TTL,
     verifyAttestation: shouldVerify = true,
     dcapVerifier,
+    requireDcap = false,
+    expectedMeasurements,
+    allowPlaintextResponses = false,
   } = options;
+  if (!shouldVerify && (requireDcap || expectedMeasurements)) {
+    throw new Error('Attestation policy cannot be required when verifyAttestation is false');
+  }
   let _session: E2EESession | null = null;
   let _pendingSession: Promise<E2EESession> | null = null;
 
@@ -78,7 +84,12 @@ export function createVeniceE2EE(options: VeniceE2EEOptions) {
     // Verify attestation if enabled
     let attestation;
     if (shouldVerify) {
-      attestation = await verifyAttestation(response, nonceBytes, dcapVerifier);
+      attestation = await verifyAttestation(response, nonceBytes, {
+        dcapVerifier,
+        requireDcap,
+        expectedMeasurements,
+        expectedModelId: modelId,
+      });
       if (attestation.errors.length > 0) {
         throw new Error(
           `TEE attestation verification failed:\n  - ${attestation.errors.join('\n  - ')}`
@@ -148,14 +159,14 @@ export function createVeniceE2EE(options: VeniceE2EEOptions) {
     hexChunk: string,
     session: E2EESession
   ): Promise<string> {
-    return decryptChunk(session.privateKey, hexChunk);
+    return decryptChunk(session.privateKey, hexChunk, allowPlaintextResponses);
   }
 
   async function* decryptStream(
     body: ReadableStream<Uint8Array>,
     session: E2EESession
   ): AsyncGenerator<string> {
-    yield* decryptSSEStream(body, session.privateKey);
+    yield* decryptSSEStream(body, session.privateKey, allowPlaintextResponses);
   }
 
   /**
@@ -179,7 +190,12 @@ export function createVeniceE2EE(options: VeniceE2EEOptions) {
     return res.json() as Promise<SignatureResponse>;
   }
 
-  /** The raw attestation response for a model, without deriving E2EE keys. */
+  /**
+   * Fetch the raw compatibility attestation response for a model.
+   *
+   * This response is not by itself a receipt trust anchor: Venice's legacy
+   * quote binds the E2EE key and nonce, not the ACI workload-keyset digest.
+   */
   async function attest(modelId: string): Promise<AttestationResponse> {
     const { response } = await fetchAttestation(modelId);
     return response;
@@ -207,14 +223,30 @@ export function isE2EEModel(modelId: string): boolean {
   return modelId.startsWith('e2ee-');
 }
 
-export type { VeniceE2EEOptions, E2EESession, EncryptedPayload, DcapVerifier, DcapVerifyResult } from './types.js';
-export type { AttestationResponse, AttestationResult, ServerVerification } from './attestation.js';
+export type {
+  VeniceE2EEOptions,
+  E2EESession,
+  EncryptedPayload,
+  DcapVerifier,
+  DcapVerifyResult,
+  ExpectedTdxMeasurements,
+  TdxMeasurements,
+} from './types.js';
+export type {
+  AttestationResponse,
+  AttestationResult,
+  AttestationVerificationOptions,
+  ServerVerification,
+} from './attestation.js';
 export { verifyAttestation, deriveEthAddress } from './attestation.js';
 export {
   verifyReceipt,
   receiptSigningBytes,
   jcsStringify,
   sha256Prefixed,
+  hashReceiptBody,
+  computeWorkloadId,
+  computeWorkloadKeysetDigest,
 } from './receipt.js';
 export type {
   Receipt,
@@ -223,7 +255,12 @@ export type {
   ReceiptVerification,
   SignatureResponse,
   WorkloadKeyset,
+  WorkloadIdentity,
+  WorkloadPublicKey,
   KeysetKey,
+  ReceiptTrustAnchor,
+  ReceiptBody,
+  ReceiptResponseHashField,
   VerifyReceiptOptions,
 } from './receipt.js';
 export {

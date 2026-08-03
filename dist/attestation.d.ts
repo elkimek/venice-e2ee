@@ -1,8 +1,17 @@
-import type { DcapVerifier, DcapVerifyResult } from './types.js';
+import type { DcapVerifier, DcapVerifyResult, ExpectedTdxMeasurements, TdxMeasurements } from './types.js';
+import type { WorkloadKeyset } from './receipt.js';
 export interface AttestationResponse {
+    api_version?: string;
     verified?: boolean;
     nonce: string;
     model: string;
+    workload_id?: string;
+    workload_keyset_digest?: string;
+    attestation?: {
+        workload_keyset?: WorkloadKeyset;
+        report_data?: string;
+        [key: string]: unknown;
+    };
     intel_quote?: string;
     signing_address?: string;
     signing_key?: string;
@@ -45,10 +54,26 @@ export interface AttestationResult {
     debugMode: boolean;
     /** Server-side TDX DCAP verification result (null if not present) */
     serverTdxValid: boolean | null;
+    /** Top-level Venice server verification result (null if not present) */
+    serverVerified: boolean | null;
     /** Full DCAP verification result (present when dcapVerifier was provided) */
     dcap?: DcapVerifyResult;
+    /** Whether an injected DCAP verifier completed without a rejected TCB status. */
+    dcapVerified: boolean;
+    /** Measurements parsed from the TDX quote. Reporting them is not validation. */
+    measurements?: TdxMeasurements;
+    /** Result of the caller-supplied measurement allowlist, or null if none was supplied. */
+    measurementsVerified: boolean | null;
+    /** Honest summary of the strongest client-side verification completed. */
+    verificationLevel: 'none' | 'binding' | 'dcap' | 'measured';
     /** List of verification failures */
     errors: string[];
+}
+export interface AttestationVerificationOptions {
+    dcapVerifier?: DcapVerifier;
+    requireDcap?: boolean;
+    expectedMeasurements?: ExpectedTdxMeasurements;
+    expectedModelId?: string;
 }
 /**
  * Derive an Ethereum address from an uncompressed secp256k1 public key.
@@ -69,8 +94,8 @@ export declare function deriveEthAddress(pubKeyHex: string): Uint8Array;
  *
  * @param response - Full attestation endpoint response
  * @param clientNonce - The 32 raw nonce bytes sent to the endpoint
- * @param dcapVerifier - Optional DCAP verifier function
+ * @param verifierOrOptions - Optional DCAP verifier or verification policy
  * @returns AttestationResult with per-check pass/fail and error list
  */
-export declare function verifyAttestation(response: AttestationResponse, clientNonce: Uint8Array, dcapVerifier?: DcapVerifier): Promise<AttestationResult>;
+export declare function verifyAttestation(response: AttestationResponse, clientNonce: Uint8Array, verifierOrOptions?: DcapVerifier | AttestationVerificationOptions): Promise<AttestationResult>;
 //# sourceMappingURL=attestation.d.ts.map

@@ -1,7 +1,7 @@
 {
   "name": "venice-e2ee",
-  "version": "0.1.0",
-  "description": "End-to-end encryption for Venice AI's TEE-backed inference",
+  "version": "0.2.1",
+  "description": "Client-side message encryption and attestation evidence for Venice AI E2EE models",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -16,12 +16,13 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "CHANGELOG.md"
   ],
   "scripts": {
     
     "build": "tsc",
-    "build:browser": "esbuild src/index.ts --bundle --format=esm --outfile=dist/venice-e2ee.browser.js --target=es2022",
+    "build:browser": "esbuild src/index.ts --bundle --format=esm --outfile=dist/venice-e2ee.browser.js --target=es2022 --banner:js=\"// @ts-nocheck\"",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -38,9 +39,9 @@
     }
   },
   "devDependencies": {
-    "esbuild": "^0.27.4",
+    "esbuild": "^0.28.1",
     "typescript": "^5.4.0",
-    "vitest": "^2.0.0"
+    "vitest": "^4.1.10"
   },
   "repository": {
     "type": "git",

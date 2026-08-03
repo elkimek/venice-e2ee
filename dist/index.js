@@ -5,7 +5,10 @@ import { verifyAttestation, } from './attestation.js';
 const DEFAULT_BASE_URL = 'https://api.venice.ai';
 const DEFAULT_SESSION_TTL = 30 * 60 * 1000; // 30 minutes
 export function createVeniceE2EE(options) {
-    const { apiKey, baseUrl = DEFAULT_BASE_URL, sessionTTL = DEFAULT_SESSION_TTL, verifyAttestation: shouldVerify = true, dcapVerifier, } = options;
+    const { apiKey, baseUrl = DEFAULT_BASE_URL, sessionTTL = DEFAULT_SESSION_TTL, verifyAttestation: shouldVerify = true, dcapVerifier, requireDcap = false, expectedMeasurements, allowPlaintextResponses = false, } = options;
+    if (!shouldVerify && (requireDcap || expectedMeasurements)) {
+        throw new Error('Attestation policy cannot be required when verifyAttestation is false');
+    }
     let _session = null;
     let _pendingSession = null;
     async function fetchAttestation(modelId) {
@@ -47,7 +50,12 @@ export function createVeniceE2EE(options) {
         // Verify attestation if enabled
         let attestation;
         if (shouldVerify) {
-            attestation = await verifyAttestation(response, nonceBytes, dcapVerifier);
+            attestation = await verifyAttestation(response, nonceBytes, {
+                dcapVerifier,
+                requireDcap,
+                expectedMeasurements,
+                expectedModelId: modelId,
+            });
             if (attestation.errors.length > 0) {
                 throw new Error(`TEE attestation verification failed:\n  - ${attestation.errors.join('\n  - ')}`);
             }
@@ -92,10 +100,10 @@ export function createVeniceE2EE(options) {
         };
     }
     async function decrypt(hexChunk, session) {
-        return decryptChunk(session.privateKey, hexChunk);
+        return decryptChunk(session.privateKey, hexChunk, allowPlaintextResponses);
     }
     async function* decryptStream(body, session) {
-        yield* decryptSSEStream(body, session.privateKey);
+        yield* decryptSSEStream(body, session.privateKey, allowPlaintextResponses);
     }
     /**
      * Fetch the signed receipt for a completion.
@@ -113,7 +121,12 @@ export function createVeniceE2EE(options) {
         }
         return res.json();
     }
-    /** The raw attestation response for a model, without deriving E2EE keys. */
+    /**
+     * Fetch the raw compatibility attestation response for a model.
+     *
+     * This response is not by itself a receipt trust anchor: Venice's legacy
+     * quote binds the E2EE key and nonce, not the ACI workload-keyset digest.
+     */
     async function attest(modelId) {
         const { response } = await fetchAttestation(modelId);
         return response;
@@ -138,7 +151,7 @@ export function isE2EEModel(modelId) {
     return modelId.startsWith('e2ee-');
 }
 export { verifyAttestation, deriveEthAddress } from './attestation.js';
-export { verifyReceipt, receiptSigningBytes, jcsStringify, sha256Prefixed, } from './receipt.js';
+export { verifyReceipt, receiptSigningBytes, jcsStringify, sha256Prefixed, hashReceiptBody, computeWorkloadId, computeWorkloadKeysetDigest, } from './receipt.js';
 export { generateKeypair, deriveAESKey, encryptMessage, decryptChunk, toHex, fromHex, } from './crypto.js';
 export { decryptSSEStream } from './stream.js';
 export { buildToolSystemPrompt, renderToolMessages, parseToolCalls, generateToolCallId, flattenMessageContent, ToolCallStreamParser, TOOL_CALL_OPEN, TOOL_CALL_CLOSE, TOOL_RESPONSE_OPEN, TOOL_RESPONSE_CLOSE, } from './tools.js';

@@ -1,6 +1,12 @@
 # venice-e2ee
 
-End-to-end encryption for [Venice AI](https://venice.ai)'s TEE-backed inference. Prompts are encrypted client-side and only decrypted inside Intel TDX Trusted Execution Environments — Venice never sees plaintext.
+Browser-side message encryption for [Venice AI](https://venice.ai)'s E2EE inference protocol.
+
+The library encrypts message `content` before transmission and decrypts model-output chunks in the client. The default attestation policy verifies freshness, signing-key binding, and debug mode directly from the TDX quote. It does **not** perform full DCAP validation, validate NVIDIA evidence, enforce a code-measurement allowlist, or authenticate each response to the attested signing key unless the caller adds the relevant policy and protocol checks.
+
+Do not treat the default `binding` result as proof of a fully verified production enclave. Venice still receives request metadata including the API credential, selected model, roles, request shape, token settings, timing, sizes, and network metadata.
+
+See the [changelog](CHANGELOG.md) for a user-readable summary of each release and its security boundaries.
 
 > **Note:** This library uses standard cryptographic primitives (ECDH, HKDF, AES-256-GCM) via audited implementations (`@noble/secp256k1`, Web Crypto API). No custom cryptography — just Venice's E2EE protocol extracted into a reusable package. Vibecoded.
 
@@ -11,6 +17,8 @@ End-to-end encryption for [Venice AI](https://venice.ai)'s TEE-backed inference.
 ```bash
 npm install venice-e2ee
 ```
+
+> **Python:** See [venice-e2ee-python](https://github.com/elkimek/venice-e2ee-python) for the Python port.
 
 Or use the browser bundle directly:
 
@@ -27,12 +35,14 @@ import { createVeniceE2EE } from 'venice-e2ee';
 
 const e2ee = createVeniceE2EE({ apiKey: 'your-venice-api-key' });
 
-// Create session (fetches TEE attestation, verifies quote, ECDH key exchange)
+// Create session (fetches the quote and runs the configured verification policy)
 const session = await e2ee.createSession('e2ee-qwen3-5-122b-a10b');
 
 // Inspect attestation result
 console.log(session.attestation);
-// { nonceVerified: true, signingKeyBound: true, debugMode: false, serverTdxValid: true, errors: [] }
+// { verificationLevel: 'binding', nonceVerified: true,
+//   signingKeyBound: true, dcapVerified: false,
+//   measurementsVerified: null, errors: [] }
 
 // Encrypt messages
 const { encryptedMessages, headers, veniceParameters } = await e2ee.encrypt(
@@ -70,26 +80,32 @@ Creates an E2EE instance with session caching and attestation verification.
 | `baseUrl` | `string` | `https://api.venice.ai` | API base URL |
 | `sessionTTL` | `number` | `1800000` (30 min) | Session cache TTL in ms |
 | `verifyAttestation` | `boolean` | `true` | Verify TEE attestation on session creation |
-| `dcapVerifier` | `DcapVerifier` | — | Optional full DCAP verifier (see below) |
+| `dcapVerifier` | `DcapVerifier` | — | Optional quote/certificate/TCB verifier (see below) |
+| `requireDcap` | `boolean` | `false` | Fail unless the injected DCAP verifier succeeds |
+| `expectedMeasurements` | `ExpectedTdxMeasurements` | — | Allowlist selected TDX measurements; requires successful DCAP verification |
+| `allowPlaintextResponses` | `boolean` | `false` | Compatibility escape hatch for legacy plaintext response content |
 
 Returns an object with:
 
-- **`createSession(modelId)`** — Generates ephemeral keypair, fetches TEE attestation, verifies the TDX quote, derives AES key. Returns an `E2EESession` with attestation results. Throws if verification fails. Sessions are cached per model with a 30-minute TTL.
+- **`createSession(modelId)`** — Generates an ephemeral keypair, fetches TEE evidence, runs the configured checks, and derives the message-encryption key. Returns an `E2EESession` with structured verification evidence. Sessions are cached per model with a 30-minute TTL.
 - **`encrypt(messages, session)`** — Encrypts an array of `{role, content}` messages. Returns `{ encryptedMessages, headers, veniceParameters }`.
-- **`decryptChunk(hexChunk, session)`** — Decrypts a single response chunk (hex-encoded ciphertext with embedded server ephemeral key).
-- **`decryptStream(body, session)`** — Async generator that parses an SSE stream and yields decrypted text chunks. Handles per-chunk ephemeral keys, plaintext passthrough, and `[DONE]` sentinel.
+- **`decryptChunk(hexChunk, session)`** — Decrypts one response chunk. Non-whitespace plaintext fails closed by default.
+- **`decryptStream(body, session)`** — Parses an SSE stream and yields decrypted text chunks. A successful response containing plaintext model output fails closed by default.
+- **`attest(modelId)`** — Fetches Venice's raw compatibility attestation response. It is evidence, not a receipt trust anchor by itself.
+- **`fetchResponseSignature(modelId, requestId)`** — Fetches the signed ACI receipt wrapper for a completion.
 - **`clearSession()`** — Zeroizes the private key and clears the cached session.
 
 ## Attestation verification
 
-Every `createSession` call fetches a TDX attestation quote from Venice and verifies it client-side:
+Every `createSession` call fetches a TDX quote from Venice. The default `binding` policy checks:
 
 1. **Nonce binding** — confirms the client nonce appears in REPORTDATA (raw or SHA-256)
 2. **Signing key binding** — confirms the signing key's Ethereum address matches REPORTDATA
 3. **Debug mode rejection** — rejects TEEs running in debug mode
-4. **Server cross-check** — flags inconsistencies with Venice's own verification results
+4. **Server cross-check** — flags negative or inconsistent Venice-reported results
+5. **Model binding** — confirms the evidence names the requested model
 
-If any check fails, `createSession` throws with a descriptive error. The attestation result is available on `session.attestation`.
+These checks show that a fresh quote contains the supplied key and is not marked for debug. They do not validate the quote signature or certificate chain. If any configured check fails, `createSession` throws. The evidence and `verificationLevel` are available on `session.attestation`.
 
 To disable verification (not recommended):
 
@@ -97,7 +113,7 @@ To disable verification (not recommended):
 const e2ee = createVeniceE2EE({ apiKey, verifyAttestation: false });
 ```
 
-### Full DCAP verification (optional)
+### Full DCAP verification
 
 For full TDX DCAP verification (PCK cert chain, quote signatures, TCB evaluation), install the optional peer dependency and inject the verifier:
 
@@ -105,21 +121,89 @@ For full TDX DCAP verification (PCK cert chain, quote signatures, TCB evaluation
 npm install @phala/dcap-qvl
 ```
 
+> **Upstream dependency note:** Current `@phala/dcap-qvl` releases depend on `elliptic`, which has an open advisory affecting ECDSA signing. This adapter uses Phala only for signature verification and never gives it a signing private key, so that key-exposure mechanism is not exercised here. If your policy rejects every dependency with an open advisory regardless of reachability, leave the optional DCAP adapter disabled until Phala changes its dependency tree.
+
 ```js
 import { createVeniceE2EE } from 'venice-e2ee';
 import { createDcapVerifier } from 'venice-e2ee/dcap';
 
 const e2ee = createVeniceE2EE({
   apiKey: 'your-venice-api-key',
-  dcapVerifier: createDcapVerifier(), // uses Phala PCCS by default
+  dcapVerifier: createDcapVerifier(),
+  requireDcap: true,
 });
 ```
 
-This adds ~500KB to browser bundles. For most use cases, the default binding checks + server cross-check are sufficient.
+The provided adapter uses Phala PCCS by default. It validates Intel DCAP quote signatures, certificate/TCB collateral, and revocation information. This is stronger than the default binding checks, but it still does not validate NVIDIA GPU evidence or establish that the measured software is approved.
+
+### Measurement policy
+
+Measurements are always reported in `session.attestation.measurements`. Reporting a measurement is not validating it. Callers with trusted expected values can enforce an allowlist:
+
+```js
+const e2ee = createVeniceE2EE({
+  apiKey,
+  dcapVerifier: createDcapVerifier(),
+  requireDcap: true,
+  expectedMeasurements: {
+    mrTd: ['trusted-mrtd-hex'],
+    rtMr0: ['trusted-rtmr0-hex'],
+  },
+});
+```
+
+Venice does not currently publish a stable measurement allowlist in its public E2EE guide, so consumers cannot safely invent these values.
 
 ### `isE2EEModel(modelId)`
 
 Returns `true` if the model ID starts with `e2ee-`.
+
+## Response receipt verification
+
+`verifyReceipt()` verifies an ACI receipt only when the caller supplies all three trust
+boundaries: an independently established workload/keyset anchor, the completion ID, and
+the exact request and response bytes.
+
+```js
+import { verifyReceipt } from 'venice-e2ee';
+
+const attestation = await e2ee.attest(modelId);
+const signatureResponse = await e2ee.fetchResponseSignature(modelId, completion.id);
+
+const verification = await verifyReceipt(signatureResponse, attestation, {
+  // Pin these from a canonical ACI report whose quote/report-data binding was
+  // verified independently. Do not copy them from an unverified response.
+  trustAnchor: {
+    workloadId: 'sha256:<trusted-workload-id>',
+    workloadKeysetDigest: 'sha256:<trusted-keyset-digest>',
+  },
+  requestId: completion.id,
+  requestBody: exactRequestBytes,
+  responseBody: exactResponseBytes,
+  responseHashField: 'wire_hash', // or 'cleartext_hash', chosen explicitly
+});
+
+if (!verification.verified) {
+  throw new Error(JSON.stringify(verification.checks));
+}
+```
+
+The verifier checks the workload id and full keyset against the trust anchor, the receipt
+signature under that keyset, the mandatory completion id, and the request/response hashes.
+Missing context, missing or duplicate receipt events, unsupported protocol versions, and
+malformed signatures all fail closed.
+
+> **Trust-anchor requirement:** Venice's `/api/v1/tee/attestation` compatibility quote
+> binds its E2EE key and nonce, not the ACI `workload_keyset_digest`. Its self-described
+> `workload_id` and `workload_keyset_digest` therefore cannot establish this trust anchor.
+> Pin values obtained from a separately verified canonical ACI attestation path. If no such
+> path or pin is available, receipt verification must remain unavailable rather than treating
+> two provider-controlled values as proof.
+
+For responses transformed after leaving the gateway, the bytes in hand may not reproduce
+the receipt's `cleartext_hash`. Select `wire_hash` only for the exact wire representation or
+`cleartext_hash` only when the gateway's pre-encryption serialization is available; never
+substitute the hash copied from the receipt itself.
 
 ## Function calling
 
@@ -242,10 +326,10 @@ Client                              Venice TEE (Intel TDX)
   |── GET /tee/attestation?model=&nonce= ─>|
   |<── { signing_key, intel_quote, ... } ──|
   |                                        |
-  |  Parse TDX quote                       |
-  |  Verify nonce in REPORTDATA            |
-  |  Verify signing key address binding    |
+  |  Parse TDX quote and measurements      |
+  |  Check nonce and key binding           |
   |  Reject debug mode                     |
+  |  Apply optional DCAP/measurement policy|
   |                                        |
   |  generateKeypair()                     |
   |  deriveAESKey(clientPriv, teePub)      |
@@ -276,17 +360,22 @@ stays ciphertext.
 
 ## Security
 
-**What's verified:**
-- Signing key is cryptographically bound to the TEE via TDX REPORTDATA
+**Default client-side checks:**
+- Signing-key address is present in TDX REPORTDATA
 - Client nonce prevents replay attacks
 - Debug-mode TEEs are rejected
 - ECDH intermediates are zeroized after key derivation
 - Private keys are zeroized on session clear/replacement
 
-**What's not verified client-side (by default):**
+**Not verified client-side by default:**
 - TDX quote signature chain (available via optional DCAP verifier)
 - NVIDIA GPU attestation
-- TEE code measurements (Venice doesn't publish expected values yet)
+- TEE code measurements
+- Response receipts unless the caller supplies an independently established workload/keyset trust anchor and exact request/response bytes
+
+**Visible metadata:** The library encrypts message `content`, not the surrounding HTTP request. Venice can observe authentication, model selection, roles, token and streaming settings, request structure, timing, sizes, billing information, and network metadata.
+
+**Response origin:** AES-GCM authenticates each chunk under a key derived from the client key and the chunk's server-supplied ephemeral key. The current streaming format does not itself prove that this ephemeral key belongs to the attested enclave. Receipt verification is available as a separate, fail-closed operation with the trust-anchor and byte-binding requirements above.
 
 ## Development
 

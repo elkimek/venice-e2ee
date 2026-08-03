@@ -17,11 +17,11 @@ export declare function createVeniceE2EE(options: VeniceE2EEOptions): {
     clearSession: () => void;
 };
 export declare function isE2EEModel(modelId: string): boolean;
-export type { VeniceE2EEOptions, E2EESession, EncryptedPayload, DcapVerifier, DcapVerifyResult } from './types.js';
-export type { AttestationResponse, AttestationResult, ServerVerification } from './attestation.js';
+export type { VeniceE2EEOptions, E2EESession, EncryptedPayload, DcapVerifier, DcapVerifyResult, ExpectedTdxMeasurements, TdxMeasurements, } from './types.js';
+export type { AttestationResponse, AttestationResult, AttestationVerificationOptions, ServerVerification, } from './attestation.js';
 export { verifyAttestation, deriveEthAddress } from './attestation.js';
-export { verifyReceipt, receiptSigningBytes, jcsStringify, sha256Prefixed, } from './receipt.js';
-export type { Receipt, ReceiptEvent, ReceiptCheck, ReceiptVerification, SignatureResponse, WorkloadKeyset, KeysetKey, VerifyReceiptOptions, } from './receipt.js';
+export { verifyReceipt, receiptSigningBytes, jcsStringify, sha256Prefixed, hashReceiptBody, computeWorkloadId, computeWorkloadKeysetDigest, } from './receipt.js';
+export type { Receipt, ReceiptEvent, ReceiptCheck, ReceiptVerification, SignatureResponse, WorkloadKeyset, WorkloadIdentity, WorkloadPublicKey, KeysetKey, ReceiptTrustAnchor, ReceiptBody, ReceiptResponseHashField, VerifyReceiptOptions, } from './receipt.js';
 export { generateKeypair, deriveAESKey, encryptMessage, decryptChunk, toHex, fromHex, } from './crypto.js';
 export { decryptSSEStream } from './stream.js';
 export { buildToolSystemPrompt, renderToolMessages, parseToolCalls, generateToolCallId, flattenMessageContent, ToolCallStreamParser, TOOL_CALL_OPEN, TOOL_CALL_CLOSE, TOOL_RESPONSE_OPEN, TOOL_RESPONSE_CLOSE, } from './tools.js';

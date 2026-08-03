@@ -61,6 +61,30 @@ describe('createVeniceE2EE.encrypt', () => {
       content: expect.any(String),
       tool_call_id: 'call_required_by_venice',
     });
-    expect(toolPayload.encryptedMessages[0].content).not.toContain('secret_function');
+    expect(toolPayload.encryptedMessages[0].content).not.toContain(
+      'secret_function'
+    );
+  });
+});
+
+describe('createVeniceE2EE policy configuration', () => {
+  it('rejects a required DCAP policy when verification is disabled', () => {
+    expect(() =>
+      createVeniceE2EE({
+        apiKey: 'test-key',
+        verifyAttestation: false,
+        requireDcap: true,
+      })
+    ).toThrow('Attestation policy cannot be required');
+  });
+
+  it('rejects a measurement policy when verification is disabled', () => {
+    expect(() =>
+      createVeniceE2EE({
+        apiKey: 'test-key',
+        verifyAttestation: false,
+        expectedMeasurements: { mrTd: '0'.repeat(96) },
+      })
+    ).toThrow('Attestation policy cannot be required');
   });
 });
