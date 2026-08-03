@@ -2,6 +2,24 @@
 
 This changelog summarizes user-visible changes to `venice-e2ee`. It also calls out the privacy and verification limits that matter when deciding whether to use a release.
 
+## Unreleased
+
+### Function calling over E2EE
+
+- Added helpers that carry tool schemas, tool calls, and tool results inside encrypted message content instead of leaking OpenAI `tools` metadata outside the encrypted channel.
+- Added incremental and one-shot tool-call parsers with support for tagged JSON, OpenAI-shaped calls, schema-guided bare arguments, parallel calls, and the lossy native formats emitted by GLM models.
+- Expanded message encryption to flatten multipart text content, encrypt assistant and tool messages, and preserve the `tool_call_id` correlation value required for tool results.
+
+### Response receipt verification
+
+- Added `attest()` and `fetchResponseSignature()` client methods plus `verifyReceipt()` and the ACI digest, body-hash, and receipt-signing helpers needed by custom integrations.
+- Receipt verification now fails closed unless the caller supplies an independently established workload ID and workload-keyset digest, the expected completion ID, and the exact request and response bytes. Callers must explicitly select whether the response bytes represent `wire_hash` or `cleartext_hash`.
+- Added adversarial coverage for attacker-selected keysets, receipt substitution, changed request or response bodies, malformed keysets and signatures, duplicate or missing events, and unsupported protocol versions.
+
+### Receipt trust boundary
+
+Venice's legacy compatibility attestation quote binds the E2EE key and nonce, not the ACI workload-keyset digest. Values copied from that response therefore do not establish a receipt trust anchor. Applications must use a separately verified canonical ACI attestation or an independently pinned workload identity and keyset digest; when neither is available, receipt verification intentionally remains unavailable.
+
 ## 0.2.1 — 2026-07-12
 
 ### Security maintenance
