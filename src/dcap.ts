@@ -13,10 +13,20 @@
  */
 import type { DcapVerifier, DcapVerifyResult } from './types.js';
 
-// Dynamic import to avoid hard dependency — @phala/dcap-qvl is a peer dep
-async function loadPhala(): Promise<typeof import('@phala/dcap-qvl')> {
+interface PhalaDcapModule {
+  PHALA_PCCS_URL: string;
+  getCollateralAndVerify(
+    quoteBytes: Uint8Array,
+    pccsUrl: string
+  ): Promise<{ status: unknown; advisory_ids?: unknown[] }>;
+}
+
+// Keep the package name indirect so TypeScript and browser bundlers do not
+// require an optional peer dependency unless the verifier is actually used.
+async function loadPhala(): Promise<PhalaDcapModule> {
+  const packageName = '@phala/dcap-qvl';
   try {
-    return await import('@phala/dcap-qvl');
+    return await import(packageName) as PhalaDcapModule;
   } catch {
     throw new Error(
       '@phala/dcap-qvl is required for DCAP verification. Install it: npm install @phala/dcap-qvl'
@@ -44,7 +54,9 @@ export function createDcapVerifier(pccsUrl?: string): DcapVerifier {
 
     return {
       status: String(result.status),
-      advisoryIds: [...result.advisory_ids],
+      advisoryIds: Array.isArray(result.advisory_ids)
+        ? result.advisory_ids.map(String)
+        : [],
     };
   };
 }

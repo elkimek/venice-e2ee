@@ -27,7 +27,13 @@ export function createVeniceE2EE(options: VeniceE2EEOptions) {
     sessionTTL = DEFAULT_SESSION_TTL,
     verifyAttestation: shouldVerify = true,
     dcapVerifier,
+    requireDcap = false,
+    expectedMeasurements,
+    allowPlaintextResponses = false,
   } = options;
+  if (!shouldVerify && (requireDcap || expectedMeasurements)) {
+    throw new Error('Attestation policy cannot be required when verifyAttestation is false');
+  }
   let _session: E2EESession | null = null;
   let _pendingSession: Promise<E2EESession> | null = null;
 
@@ -77,7 +83,12 @@ export function createVeniceE2EE(options: VeniceE2EEOptions) {
     // Verify attestation if enabled
     let attestation;
     if (shouldVerify) {
-      attestation = await verifyAttestation(response, nonceBytes, dcapVerifier);
+      attestation = await verifyAttestation(response, nonceBytes, {
+        dcapVerifier,
+        requireDcap,
+        expectedMeasurements,
+        expectedModelId: modelId,
+      });
       if (attestation.errors.length > 0) {
         throw new Error(
           `TEE attestation verification failed:\n  - ${attestation.errors.join('\n  - ')}`
@@ -147,14 +158,14 @@ export function createVeniceE2EE(options: VeniceE2EEOptions) {
     hexChunk: string,
     session: E2EESession
   ): Promise<string> {
-    return decryptChunk(session.privateKey, hexChunk);
+    return decryptChunk(session.privateKey, hexChunk, allowPlaintextResponses);
   }
 
   async function* decryptStream(
     body: ReadableStream<Uint8Array>,
     session: E2EESession
   ): AsyncGenerator<string> {
-    yield* decryptSSEStream(body, session.privateKey);
+    yield* decryptSSEStream(body, session.privateKey, allowPlaintextResponses);
   }
 
   function clearSession(): void {
@@ -177,8 +188,21 @@ export function isE2EEModel(modelId: string): boolean {
   return modelId.startsWith('e2ee-');
 }
 
-export type { VeniceE2EEOptions, E2EESession, EncryptedPayload, DcapVerifier, DcapVerifyResult } from './types.js';
-export type { AttestationResponse, AttestationResult, ServerVerification } from './attestation.js';
+export type {
+  VeniceE2EEOptions,
+  E2EESession,
+  EncryptedPayload,
+  DcapVerifier,
+  DcapVerifyResult,
+  ExpectedTdxMeasurements,
+  TdxMeasurements,
+} from './types.js';
+export type {
+  AttestationResponse,
+  AttestationResult,
+  AttestationVerificationOptions,
+  ServerVerification,
+} from './attestation.js';
 export { verifyAttestation, deriveEthAddress } from './attestation.js';
 export {
   generateKeypair,

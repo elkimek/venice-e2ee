@@ -138,15 +138,17 @@ describe('encrypt/decrypt roundtrip', () => {
   });
 });
 
-describe('decryptChunk passthrough', () => {
+describe('decryptChunk plaintext policy', () => {
   it('passes through empty string', async () => {
     const kp = generateKeypair();
     expect(await decryptChunk(kp.privateKey, '')).toBe('');
   });
 
-  it('passes through short strings', async () => {
+  it('rejects short plaintext strings by default', async () => {
     const kp = generateKeypair();
-    expect(await decryptChunk(kp.privateKey, 'hello')).toBe('hello');
+    await expect(decryptChunk(kp.privateKey, 'hello')).rejects.toThrow(
+      'unencrypted content'
+    );
   });
 
   it('passes through whitespace', async () => {
@@ -154,10 +156,24 @@ describe('decryptChunk passthrough', () => {
     expect(await decryptChunk(kp.privateKey, '   ')).toBe('   ');
   });
 
-  it('passes through non-hex strings', async () => {
+  it('rejects non-hex plaintext by default', async () => {
     const kp = generateKeypair();
-    expect(await decryptChunk(kp.privateKey, 'not-hex-data!')).toBe(
-      'not-hex-data!'
+    await expect(decryptChunk(kp.privateKey, 'not-hex-data!')).rejects.toThrow(
+      'unencrypted content'
+    );
+  });
+
+  it('supports explicit legacy plaintext passthrough', async () => {
+    const kp = generateKeypair();
+    expect(await decryptChunk(kp.privateKey, 'legacy plaintext', true)).toBe(
+      'legacy plaintext'
+    );
+  });
+
+  it('rejects encrypted-looking content with an invalid EC point prefix', async () => {
+    const kp = generateKeypair();
+    await expect(decryptChunk(kp.privateKey, '00'.repeat(93))).rejects.toThrow(
+      'invalid ephemeral public key'
     );
   });
 });

@@ -11,6 +11,26 @@ export interface DcapVerifyResult {
  * Use `createDcapVerifier()` from `venice-e2ee/dcap` for the default implementation.
  */
 export type DcapVerifier = (quoteBytes: Uint8Array) => Promise<DcapVerifyResult>;
+/** TDX measurements extracted from the quote body. */
+export interface TdxMeasurements {
+    mrSeam: string;
+    mrSignerSeam: string;
+    mrTd: string;
+    mrConfigId: string;
+    mrOwner: string;
+    mrOwnerConfig: string;
+    rtMr0: string;
+    rtMr1: string;
+    rtMr2: string;
+    rtMr3: string;
+}
+/**
+ * Allowlisted TDX measurements. Each configured field accepts one value or a
+ * list of values. Unconfigured fields are reported but are not policy checks.
+ */
+export type ExpectedTdxMeasurements = Partial<{
+    [K in keyof TdxMeasurements]: string | string[];
+}>;
 export interface VeniceE2EEOptions {
     apiKey: string;
     baseUrl?: string;
@@ -19,7 +39,8 @@ export interface VeniceE2EEOptions {
     verifyAttestation?: boolean;
     /**
      * Optional DCAP verifier for full TDX quote signature and cert chain verification.
-     * When provided, runs alongside v1 binding checks for complete attestation.
+     * When provided, validates the quote and TCB alongside the binding checks.
+     * GPU evidence and code measurements remain separate policy decisions.
      *
      * ```ts
      * import { createDcapVerifier } from 'venice-e2ee/dcap';
@@ -27,6 +48,15 @@ export interface VeniceE2EEOptions {
      * ```
      */
     dcapVerifier?: DcapVerifier;
+    /** Fail session creation unless full DCAP verification ran. Default: false. */
+    requireDcap?: boolean;
+    /** Optional measurement allowlist. Requires successful DCAP verification. */
+    expectedMeasurements?: ExpectedTdxMeasurements;
+    /**
+     * Permit non-encrypted response content to pass through. Default: false.
+     * Whitespace-only chunks remain allowed because they reveal no model output.
+     */
+    allowPlaintextResponses?: boolean;
 }
 export interface E2EESession {
     privateKey: Uint8Array;

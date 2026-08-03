@@ -124,6 +124,30 @@ describe('decryptSSEStream', () => {
     expect(chunks).toEqual([' ', '\n']);
   });
 
+  it('fails closed on plaintext model output', async () => {
+    const client = generateKeypair();
+    const event = JSON.stringify({ choices: [{ delta: { content: 'not encrypted' } }] });
+    const stream = createSSEStream([event, '[DONE]']);
+
+    const read = async () => {
+      for await (const _chunk of decryptSSEStream(stream, client.privateKey)) {
+        // consume
+      }
+    };
+    await expect(read()).rejects.toThrow('unencrypted content');
+  });
+
+  it('allows explicit legacy plaintext passthrough', async () => {
+    const client = generateKeypair();
+    const event = JSON.stringify({ choices: [{ delta: { content: 'legacy' } }] });
+    const stream = createSSEStream([event, '[DONE]']);
+    const chunks: string[] = [];
+    for await (const chunk of decryptSSEStream(stream, client.privateKey, true)) {
+      chunks.push(chunk);
+    }
+    expect(chunks).toEqual(['legacy']);
+  });
+
   it('skips events without content', async () => {
     const client = generateKeypair();
     const cipherHex = await encryptForStream('data', client.privateKey, client.pubKeyHex);

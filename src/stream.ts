@@ -14,7 +14,8 @@ import { decryptChunk } from './crypto.js';
  */
 export async function* decryptSSEStream(
   body: ReadableStream<Uint8Array>,
-  privateKey: Uint8Array
+  privateKey: Uint8Array,
+  allowPlaintextResponses = false
 ): AsyncGenerator<string> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -45,7 +46,7 @@ export async function* decryptSSEStream(
         if (content === undefined || content === null) continue;
 
         try {
-          yield await decryptChunk(privateKey, content);
+          yield await decryptChunk(privateKey, content, allowPlaintextResponses);
         } catch (e: unknown) {
           if (e instanceof DOMException && e.name === 'OperationError') {
             throw new Error(
@@ -72,7 +73,7 @@ export async function* decryptSSEStream(
           const content = event.choices?.[0]?.delta?.content;
           if (content !== undefined && content !== null) {
             try {
-              yield await decryptChunk(privateKey, content);
+              yield await decryptChunk(privateKey, content, allowPlaintextResponses);
             } catch (e: unknown) {
               if (e instanceof DOMException && e.name === 'OperationError') {
                 throw new Error(

@@ -1,5 +1,5 @@
 import { keccak_256 } from '@noble/hashes/sha3.js';
-import { fromHex } from './crypto.js';
+import { fromHex, toHex } from './crypto.js';
 // ── TDX quote layout ──────────────────────────────────────────────────
 // Header: 48 bytes (version, attestationKeyType, teeType, ...)
 // TDX Body starts at offset 48:
@@ -11,6 +11,18 @@ const TD_ATTRIBUTES_LEN = 8;
 const REPORT_DATA_OFFSET = TDX_BODY_OFFSET + 520;
 const REPORT_DATA_LEN = 64;
 const MIN_QUOTE_LEN = REPORT_DATA_OFFSET + REPORT_DATA_LEN; // 632 bytes
+const MEASUREMENT_LAYOUT = [
+    ['mrSeam', 16],
+    ['mrSignerSeam', 64],
+    ['mrTd', 136],
+    ['mrConfigId', 184],
+    ['mrOwner', 232],
+    ['mrOwnerConfig', 280],
+    ['rtMr0', 328],
+    ['rtMr1', 376],
+    ['rtMr2', 424],
+    ['rtMr3', 472],
+];
 const TDX_TEE_TYPE = 0x00000081;
 // ── Helpers ───────────────────────────────────────────────────────────
 /**
@@ -38,10 +50,24 @@ function constantTimeEqual(a, b) {
     }
     return diff === 0;
 }
+/** Decode the endpoint's quote representation. Venice has documented both hex and base64. */
+function decodeQuote(quote) {
+    const value = quote.startsWith('0x') ? quote.slice(2) : quote;
+    if (value.length % 2 === 0 && /^[0-9a-f]+$/i.test(value))
+        return fromHex(value);
+    try {
+        const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
+        const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
+        const binary = atob(padded);
+        return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+    }
+    catch {
+        throw new Error('TDX quote is neither valid hex nor base64');
+    }
+}
 /** Parse a TDX quote and extract fields needed for verification. */
-function parseTdxQuote(quoteHex) {
-    const hex = quoteHex.startsWith('0x') ? quoteHex.slice(2) : quoteHex;
-    const bytes = fromHex(hex);
+function parseTdxQuote(quote) {
+    const bytes = decodeQuote(quote);
     if (bytes.length < MIN_QUOTE_LEN) {
         throw new Error(`TDX quote too short: ${bytes.length} bytes (need >= ${MIN_QUOTE_LEN})`);
     }
@@ -51,9 +77,35 @@ function parseTdxQuote(quoteHex) {
         throw new Error(`Not a TDX quote: teeType=0x${teeType.toString(16)} (expected 0x81)`);
     }
     return {
+        bytes,
         tdAttributes: bytes.slice(TD_ATTRIBUTES_OFFSET, TD_ATTRIBUTES_OFFSET + TD_ATTRIBUTES_LEN),
         reportData: bytes.slice(REPORT_DATA_OFFSET, REPORT_DATA_OFFSET + REPORT_DATA_LEN),
+        measurements: Object.fromEntries(MEASUREMENT_LAYOUT.map(([name, offset]) => [
+            name,
+            toHex(bytes.slice(TDX_BODY_OFFSET + offset, TDX_BODY_OFFSET + offset + 48)),
+        ])),
     };
+}
+function normalizeMeasurement(value) {
+    return value.toLowerCase().replace(/^0x/, '');
+}
+function verifyMeasurements(actual, expected, errors) {
+    let checked = 0;
+    let matched = true;
+    for (const [name, allowedValue] of Object.entries(expected)) {
+        const allowed = (Array.isArray(allowedValue) ? allowedValue : [allowedValue])
+            .map(normalizeMeasurement);
+        checked += 1;
+        if (!actual[name] || !allowed.includes(normalizeMeasurement(actual[name]))) {
+            matched = false;
+            errors.push(`TDX measurement mismatch: ${name}`);
+        }
+    }
+    if (checked === 0) {
+        errors.push('Expected measurement policy is empty');
+        return false;
+    }
+    return matched;
 }
 // ── Main verification ─────────────────────────────────────────────────
 /**
@@ -70,24 +122,57 @@ function parseTdxQuote(quoteHex) {
  *
  * @param response - Full attestation endpoint response
  * @param clientNonce - The 32 raw nonce bytes sent to the endpoint
- * @param dcapVerifier - Optional DCAP verifier function
+ * @param verifierOrOptions - Optional DCAP verifier or verification policy
  * @returns AttestationResult with per-check pass/fail and error list
  */
-export async function verifyAttestation(response, clientNonce, dcapVerifier) {
+export async function verifyAttestation(response, clientNonce, verifierOrOptions) {
+    const options = typeof verifierOrOptions === 'function'
+        ? { dcapVerifier: verifierOrOptions }
+        : verifierOrOptions ?? {};
+    const { dcapVerifier, requireDcap = false, expectedMeasurements, expectedModelId } = options;
     const errors = [];
     let nonceVerified = false;
     let signingKeyBound = false;
     let debugMode = false;
     let serverTdxValid = null;
+    let serverVerified = response.verified ?? null;
     let dcap;
+    let dcapVerified = false;
+    let measurements;
+    let measurementsVerified = null;
+    const result = () => ({
+        nonceVerified,
+        signingKeyBound,
+        debugMode,
+        serverTdxValid,
+        serverVerified,
+        dcap,
+        dcapVerified,
+        measurements,
+        measurementsVerified,
+        verificationLevel: dcapVerified
+            ? (measurementsVerified === true ? 'measured' : 'dcap')
+            : (nonceVerified && signingKeyBound && !debugMode ? 'binding' : 'none'),
+        errors,
+    });
     if (clientNonce.length !== 32) {
         errors.push(`Invalid client nonce length: ${clientNonce.length} (expected 32)`);
-        return { nonceVerified, signingKeyBound, debugMode, serverTdxValid, errors };
+        return result();
+    }
+    const clientNonceHex = toHex(clientNonce);
+    if (response.nonce && normalizeMeasurement(response.nonce) !== clientNonceHex) {
+        errors.push('Attestation response nonce does not match the requested nonce');
+    }
+    if (expectedModelId && response.model !== expectedModelId) {
+        errors.push(`Attestation model mismatch: expected ${expectedModelId}, received ${response.model || 'missing'}`);
+    }
+    if (response.verified === false) {
+        errors.push('Venice reported that server-side attestation verification failed');
     }
     const signingKey = response.signing_key || response.signing_public_key;
     if (!signingKey) {
         errors.push('No signing key in attestation response');
-        return { nonceVerified, signingKeyBound, debugMode, serverTdxValid, errors };
+        return result();
     }
     // ── Server-side cross-check ────────────────────────────────────────
     if (response.server_verification) {
@@ -96,20 +181,33 @@ export async function verifyAttestation(response, clientNonce, dcapVerifier) {
         if (sv.tdx && !sv.tdx.valid) {
             errors.push(`Server TDX verification failed: ${sv.tdx.error || 'unknown reason'}`);
         }
+        if (sv.tdx?.signatureValid === false) {
+            errors.push('Venice reported an invalid TDX quote signature');
+        }
+        if (sv.tdx?.certificateChainValid === false) {
+            errors.push('Venice reported an invalid TDX certificate chain');
+        }
+        if (sv.tdx?.attestationKeyMatch === false) {
+            errors.push('Venice reported a TDX attestation-key mismatch');
+        }
+        if (sv.nvidia && !sv.nvidia.valid) {
+            errors.push(`Venice reported failed NVIDIA attestation: ${sv.nvidia.error || 'unknown reason'}`);
+        }
     }
     // ── Client-side quote checks ───────────────────────────────────────
     if (!response.intel_quote) {
         errors.push('No intel_quote in attestation response — cannot verify client-side');
-        return { nonceVerified, signingKeyBound, debugMode, serverTdxValid, errors };
+        return result();
     }
     let reportData;
     let tdAttributes;
+    let quoteBytes;
     try {
-        ({ reportData, tdAttributes } = parseTdxQuote(response.intel_quote));
+        ({ bytes: quoteBytes, reportData, tdAttributes, measurements } = parseTdxQuote(response.intel_quote));
     }
     catch (e) {
         errors.push(`Failed to parse TDX quote: ${e.message}`);
-        return { nonceVerified, signingKeyBound, debugMode, serverTdxValid, errors };
+        return result();
     }
     // Check 1: Debug mode
     debugMode = (tdAttributes[0] & 0x01) !== 0;
@@ -157,26 +255,39 @@ export async function verifyAttestation(response, clientNonce, dcapVerifier) {
             errors.push(`Nonce binding inconsistency: client=${nonceVerified}, server=${nb.bound}`);
         }
     }
+    if (expectedMeasurements) {
+        measurementsVerified = verifyMeasurements(measurements, expectedMeasurements, errors);
+    }
     // Check 5: Full DCAP verification (if verifier provided)
-    if (dcapVerifier && response.intel_quote) {
-        const quoteHex = response.intel_quote.startsWith('0x')
-            ? response.intel_quote.slice(2)
-            : response.intel_quote;
+    if (dcapVerifier) {
         try {
-            dcap = await dcapVerifier(fromHex(quoteHex));
-            // Reject revoked TCB; warn on out-of-date
+            dcap = await dcapVerifier(quoteBytes);
             const status = dcap.status;
-            if (status === 'Revoked') {
-                errors.push('DCAP verification: TCB status is Revoked');
+            const acceptedStatuses = new Set([
+                'UpToDate',
+                'SWHardeningNeeded',
+                'ConfigurationNeeded',
+                'ConfigurationAndSWHardeningNeeded',
+            ]);
+            if (acceptedStatuses.has(status)) {
+                dcapVerified = true;
             }
-            else if (status === 'OutOfDate' || status === 'OutOfDateConfigurationNeeded') {
-                errors.push(`DCAP verification: TCB status is ${status} — platform firmware may need updating`);
+            else {
+                errors.push(`DCAP verification: unacceptable TCB status ${status || 'Unknown'}`);
             }
         }
         catch (e) {
             errors.push(`DCAP verification failed: ${e.message}`);
         }
     }
-    return { nonceVerified, signingKeyBound, debugMode, serverTdxValid, dcap, errors };
+    if (requireDcap && !dcapVerified) {
+        errors.push(dcapVerifier
+            ? 'Full DCAP verification did not complete successfully'
+            : 'Full DCAP verification is required but no dcapVerifier was provided');
+    }
+    if (measurementsVerified === true && !dcapVerified) {
+        errors.push('Measurement allowlist requires successful DCAP verification of the quote');
+    }
+    return result();
 }
 //# sourceMappingURL=attestation.js.map

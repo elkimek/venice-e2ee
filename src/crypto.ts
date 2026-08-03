@@ -78,19 +78,27 @@ export async function encryptMessage(
 
 export async function decryptChunk(
   clientPrivateKey: Uint8Array,
-  hexString: string
+  hexString: string,
+  allowPlaintext = false
 ): Promise<string> {
-  // Short or non-hex content is plaintext passthrough (e.g. whitespace tokens)
-  if (
-    !hexString ||
-    hexString.length < 154 ||
-    !/^[0-9a-f]+$/i.test(hexString)
-  ) {
+  if (typeof hexString !== 'string') {
+    throw new TypeError('Encrypted response content must be a string');
+  }
+  // Venice may emit formatting-only whitespace outside encrypted chunks. It
+  // carries no model output, so accepting it does not disclose response text.
+  if (!hexString || /^\s+$/.test(hexString)) {
     return hexString;
   }
+  const encrypted = hexString.length >= 186 && /^[0-9a-f]+$/i.test(hexString);
+  if (!encrypted) {
+    if (allowPlaintext) return hexString;
+    throw new Error('Venice E2EE response contained unencrypted content');
+  }
   const raw = fromHex(hexString);
-  // Verify uncompressed EC point prefix to avoid false-positive decryption attempts
-  if (raw[0] !== 0x04) return hexString;
+  if (raw[0] !== 0x04) {
+    if (allowPlaintext) return hexString;
+    throw new Error('Venice E2EE response has an invalid ephemeral public key');
+  }
   const serverEphemeralPubKey = toHex(raw.slice(0, 65));
   const iv = raw.slice(65, 77);
   const ciphertext = raw.slice(77);
