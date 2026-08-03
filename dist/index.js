@@ -105,6 +105,32 @@ export function createVeniceE2EE(options) {
     async function* decryptStream(body, session) {
         yield* decryptSSEStream(body, session.privateKey, allowPlaintextResponses);
     }
+    /**
+     * Fetch the signed receipt for a completion.
+     *
+     * `requestId` is Venice's completion `id`, not one a client made up. Pair the
+     * result with {@link verifyReceipt} and the attestation from the same model to
+     * prove the completion came from the attested enclave.
+     */
+    async function fetchResponseSignature(modelId, requestId) {
+        const url = `${baseUrl}/api/v1/tee/signature?model=${encodeURIComponent(modelId)}` +
+            `&request_id=${encodeURIComponent(requestId)}`;
+        const res = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+        if (!res.ok) {
+            throw new Error(`TEE signature fetch failed (${res.status}): ${await res.text()}`);
+        }
+        return res.json();
+    }
+    /**
+     * Fetch the raw compatibility attestation response for a model.
+     *
+     * This response is not by itself a receipt trust anchor: Venice's legacy
+     * quote binds the E2EE key and nonce, not the ACI workload-keyset digest.
+     */
+    async function attest(modelId) {
+        const { response } = await fetchAttestation(modelId);
+        return response;
+    }
     function clearSession() {
         if (_session) {
             _session.privateKey.fill(0);
@@ -113,9 +139,11 @@ export function createVeniceE2EE(options) {
     }
     return {
         createSession,
+        attest,
         encrypt,
         decryptChunk: decrypt,
         decryptStream,
+        fetchResponseSignature,
         clearSession,
     };
 }
@@ -123,6 +151,7 @@ export function isE2EEModel(modelId) {
     return modelId.startsWith('e2ee-');
 }
 export { verifyAttestation, deriveEthAddress } from './attestation.js';
+export { verifyReceipt, receiptSigningBytes, jcsStringify, sha256Prefixed, hashReceiptBody, computeWorkloadId, computeWorkloadKeysetDigest, } from './receipt.js';
 export { generateKeypair, deriveAESKey, encryptMessage, decryptChunk, toHex, fromHex, } from './crypto.js';
 export { decryptSSEStream } from './stream.js';
 export { buildToolSystemPrompt, renderToolMessages, parseToolCalls, generateToolCallId, flattenMessageContent, ToolCallStreamParser, TOOL_CALL_OPEN, TOOL_CALL_CLOSE, TOOL_RESPONSE_OPEN, TOOL_RESPONSE_CLOSE, } from './tools.js';

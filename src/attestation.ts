@@ -6,13 +6,22 @@ import type {
   ExpectedTdxMeasurements,
   TdxMeasurements,
 } from './types.js';
+import type { WorkloadKeyset } from './receipt.js';
 
 // ── Types ──────────────────────────────────────────────────────────────
 
 export interface AttestationResponse {
+  api_version?: string;
   verified?: boolean;
   nonce: string;
   model: string;
+  workload_id?: string;
+  workload_keyset_digest?: string;
+  attestation?: {
+    workload_keyset?: WorkloadKeyset;
+    report_data?: string;
+    [key: string]: unknown;
+  };
   intel_quote?: string;
   signing_address?: string;
   signing_key?: string;

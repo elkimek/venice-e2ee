@@ -1123,6 +1123,12 @@ function clean(...arrays) {
     arrays[i].fill(0);
   }
 }
+function createView(arr) {
+  return new DataView(arr.buffer, arr.byteOffset, arr.byteLength);
+}
+function rotr(word, shift) {
+  return word << 32 - shift | word >>> shift;
+}
 var isLE = /* @__PURE__ */ (() => new Uint8Array(new Uint32Array([287454020]).buffer)[0] === 68)();
 function byteSwap(word) {
   return word << 24 & 4278190080 | word << 8 & 16711680 | word >>> 8 & 65280 | word >>> 24 & 255;
@@ -1143,6 +1149,9 @@ function createHasher(hashCons, info = {}) {
   Object.assign(hashC, info);
   return Object.freeze(hashC);
 }
+var oidNist = (suffix) => ({
+  oid: Uint8Array.from([6, 9, 96, 134, 72, 1, 101, 3, 4, 2, suffix])
+});
 
 // node_modules/@noble/hashes/sha3.js
 var _0n = BigInt(0);
@@ -1587,6 +1596,496 @@ async function verifyAttestation(response, clientNonce, verifierOrOptions) {
   return result();
 }
 
+// node_modules/@noble/hashes/_md.js
+function Chi(a, b, c) {
+  return a & b ^ ~a & c;
+}
+function Maj(a, b, c) {
+  return a & b ^ a & c ^ b & c;
+}
+var HashMD = class {
+  blockLen;
+  outputLen;
+  padOffset;
+  isLE;
+  // For partial updates less than block size
+  buffer;
+  view;
+  finished = false;
+  length = 0;
+  pos = 0;
+  destroyed = false;
+  constructor(blockLen, outputLen, padOffset, isLE2) {
+    this.blockLen = blockLen;
+    this.outputLen = outputLen;
+    this.padOffset = padOffset;
+    this.isLE = isLE2;
+    this.buffer = new Uint8Array(blockLen);
+    this.view = createView(this.buffer);
+  }
+  update(data) {
+    aexists(this);
+    abytes2(data);
+    const { view, buffer, blockLen } = this;
+    const len = data.length;
+    for (let pos = 0; pos < len; ) {
+      const take = Math.min(blockLen - this.pos, len - pos);
+      if (take === blockLen) {
+        const dataView = createView(data);
+        for (; blockLen <= len - pos; pos += blockLen)
+          this.process(dataView, pos);
+        continue;
+      }
+      buffer.set(data.subarray(pos, pos + take), this.pos);
+      this.pos += take;
+      pos += take;
+      if (this.pos === blockLen) {
+        this.process(view, 0);
+        this.pos = 0;
+      }
+    }
+    this.length += data.length;
+    this.roundClean();
+    return this;
+  }
+  digestInto(out) {
+    aexists(this);
+    aoutput(out, this);
+    this.finished = true;
+    const { buffer, view, blockLen, isLE: isLE2 } = this;
+    let { pos } = this;
+    buffer[pos++] = 128;
+    clean(this.buffer.subarray(pos));
+    if (this.padOffset > blockLen - pos) {
+      this.process(view, 0);
+      pos = 0;
+    }
+    for (let i = pos; i < blockLen; i++)
+      buffer[i] = 0;
+    view.setBigUint64(blockLen - 8, BigInt(this.length * 8), isLE2);
+    this.process(view, 0);
+    const oview = createView(out);
+    const len = this.outputLen;
+    if (len % 4)
+      throw new Error("_sha2: outputLen must be aligned to 32bit");
+    const outLen = len / 4;
+    const state = this.get();
+    if (outLen > state.length)
+      throw new Error("_sha2: outputLen bigger than state");
+    for (let i = 0; i < outLen; i++)
+      oview.setUint32(4 * i, state[i], isLE2);
+  }
+  digest() {
+    const { buffer, outputLen } = this;
+    this.digestInto(buffer);
+    const res = buffer.slice(0, outputLen);
+    this.destroy();
+    return res;
+  }
+  _cloneInto(to) {
+    to ||= new this.constructor();
+    to.set(...this.get());
+    const { blockLen, buffer, length, finished, destroyed, pos } = this;
+    to.destroyed = destroyed;
+    to.finished = finished;
+    to.length = length;
+    to.pos = pos;
+    if (length % blockLen)
+      to.buffer.set(buffer);
+    return to;
+  }
+  clone() {
+    return this._cloneInto();
+  }
+};
+var SHA256_IV = /* @__PURE__ */ Uint32Array.from([
+  1779033703,
+  3144134277,
+  1013904242,
+  2773480762,
+  1359893119,
+  2600822924,
+  528734635,
+  1541459225
+]);
+
+// node_modules/@noble/hashes/sha2.js
+var SHA256_K = /* @__PURE__ */ Uint32Array.from([
+  1116352408,
+  1899447441,
+  3049323471,
+  3921009573,
+  961987163,
+  1508970993,
+  2453635748,
+  2870763221,
+  3624381080,
+  310598401,
+  607225278,
+  1426881987,
+  1925078388,
+  2162078206,
+  2614888103,
+  3248222580,
+  3835390401,
+  4022224774,
+  264347078,
+  604807628,
+  770255983,
+  1249150122,
+  1555081692,
+  1996064986,
+  2554220882,
+  2821834349,
+  2952996808,
+  3210313671,
+  3336571891,
+  3584528711,
+  113926993,
+  338241895,
+  666307205,
+  773529912,
+  1294757372,
+  1396182291,
+  1695183700,
+  1986661051,
+  2177026350,
+  2456956037,
+  2730485921,
+  2820302411,
+  3259730800,
+  3345764771,
+  3516065817,
+  3600352804,
+  4094571909,
+  275423344,
+  430227734,
+  506948616,
+  659060556,
+  883997877,
+  958139571,
+  1322822218,
+  1537002063,
+  1747873779,
+  1955562222,
+  2024104815,
+  2227730452,
+  2361852424,
+  2428436474,
+  2756734187,
+  3204031479,
+  3329325298
+]);
+var SHA256_W = /* @__PURE__ */ new Uint32Array(64);
+var SHA2_32B = class extends HashMD {
+  constructor(outputLen) {
+    super(64, outputLen, 8, false);
+  }
+  get() {
+    const { A, B, C: C2, D, E, F, G: G2, H } = this;
+    return [A, B, C2, D, E, F, G2, H];
+  }
+  // prettier-ignore
+  set(A, B, C2, D, E, F, G2, H) {
+    this.A = A | 0;
+    this.B = B | 0;
+    this.C = C2 | 0;
+    this.D = D | 0;
+    this.E = E | 0;
+    this.F = F | 0;
+    this.G = G2 | 0;
+    this.H = H | 0;
+  }
+  process(view, offset) {
+    for (let i = 0; i < 16; i++, offset += 4)
+      SHA256_W[i] = view.getUint32(offset, false);
+    for (let i = 16; i < 64; i++) {
+      const W15 = SHA256_W[i - 15];
+      const W2 = SHA256_W[i - 2];
+      const s0 = rotr(W15, 7) ^ rotr(W15, 18) ^ W15 >>> 3;
+      const s1 = rotr(W2, 17) ^ rotr(W2, 19) ^ W2 >>> 10;
+      SHA256_W[i] = s1 + SHA256_W[i - 7] + s0 + SHA256_W[i - 16] | 0;
+    }
+    let { A, B, C: C2, D, E, F, G: G2, H } = this;
+    for (let i = 0; i < 64; i++) {
+      const sigma1 = rotr(E, 6) ^ rotr(E, 11) ^ rotr(E, 25);
+      const T1 = H + sigma1 + Chi(E, F, G2) + SHA256_K[i] + SHA256_W[i] | 0;
+      const sigma0 = rotr(A, 2) ^ rotr(A, 13) ^ rotr(A, 22);
+      const T2 = sigma0 + Maj(A, B, C2) | 0;
+      H = G2;
+      G2 = F;
+      F = E;
+      E = D + T1 | 0;
+      D = C2;
+      C2 = B;
+      B = A;
+      A = T1 + T2 | 0;
+    }
+    A = A + this.A | 0;
+    B = B + this.B | 0;
+    C2 = C2 + this.C | 0;
+    D = D + this.D | 0;
+    E = E + this.E | 0;
+    F = F + this.F | 0;
+    G2 = G2 + this.G | 0;
+    H = H + this.H | 0;
+    this.set(A, B, C2, D, E, F, G2, H);
+  }
+  roundClean() {
+    clean(SHA256_W);
+  }
+  destroy() {
+    this.set(0, 0, 0, 0, 0, 0, 0, 0);
+    clean(this.buffer);
+  }
+};
+var _SHA256 = class extends SHA2_32B {
+  // We cannot use array here since array allows indexing by variable
+  // which means optimizer/compiler cannot use registers.
+  A = SHA256_IV[0] | 0;
+  B = SHA256_IV[1] | 0;
+  C = SHA256_IV[2] | 0;
+  D = SHA256_IV[3] | 0;
+  E = SHA256_IV[4] | 0;
+  F = SHA256_IV[5] | 0;
+  G = SHA256_IV[6] | 0;
+  H = SHA256_IV[7] | 0;
+  constructor() {
+    super(32);
+  }
+};
+var sha256 = /* @__PURE__ */ createHasher(
+  () => new _SHA256(),
+  /* @__PURE__ */ oidNist(1)
+);
+
+// src/receipt.ts
+function jcsStringify(value) {
+  if (value === null) return "null";
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "number") {
+    if (!Number.isInteger(value)) {
+      throw new TypeError(`JCS: ACI restricts numbers to integers, got ${value}`);
+    }
+    return Object.is(value, -0) ? "0" : String(value);
+  }
+  if (typeof value !== "object") {
+    throw new TypeError(`JCS: unsupported type ${typeof value}`);
+  }
+  if (Array.isArray(value)) return `[${value.map((item) => jcsStringify(item)).join(",")}]`;
+  const entries = Object.keys(value).filter((key) => value[key] !== void 0).sort().map((key) => `${JSON.stringify(key)}:${jcsStringify(value[key])}`);
+  return `{${entries.join(",")}}`;
+}
+function sha256Prefixed(text) {
+  return hashReceiptBody(text);
+}
+function hashReceiptBody(body) {
+  if (typeof body !== "string" && !(body instanceof Uint8Array)) {
+    throw new TypeError("Receipt body must be a string or Uint8Array");
+  }
+  const bytes = typeof body === "string" ? new TextEncoder().encode(body) : body;
+  return `sha256:${toHex(sha256(bytes))}`;
+}
+function computeWorkloadId(publicKey) {
+  return sha256Prefixed(
+    jcsStringify({ algo: publicKey.algo, public_key: publicKey.public_key })
+  );
+}
+function computeWorkloadKeysetDigest(keyset) {
+  return sha256Prefixed(jcsStringify(keyset));
+}
+function receiptSigningBytes(receipt) {
+  const { value: _omitted, ...signatureWithoutValue } = receipt.signature;
+  const forSigning = {
+    ...receipt,
+    signature: signatureWithoutValue
+  };
+  return new TextEncoder().encode(jcsStringify(forSigning));
+}
+function fromHexBytes(hex) {
+  const clean2 = hex.startsWith("0x") ? hex.slice(2) : hex;
+  if (clean2.length === 0 || clean2.length % 2 !== 0 || !/^[0-9a-f]+$/i.test(clean2)) {
+    throw new TypeError("Expected non-empty, even-length hexadecimal bytes");
+  }
+  const out = new Uint8Array(clean2.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = Number.parseInt(clean2.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
+}
+async function verifyEd25519(publicKey, signature, message) {
+  const key = await crypto.subtle.importKey("raw", publicKey, "Ed25519", false, [
+    "verify"
+  ]);
+  return crypto.subtle.verify(
+    "Ed25519",
+    key,
+    signature,
+    message
+  );
+}
+function exactlyOneEvent(receipt, type) {
+  const matches = receipt.event_log.filter(
+    (event) => event && typeof event === "object" && event.type === type
+  );
+  return matches.length === 1 ? matches[0] : void 0;
+}
+function isReceiptBody(value) {
+  return typeof value === "string" || value instanceof Uint8Array;
+}
+async function verifyReceipt(signatureResponse, attestation, options) {
+  const checks = [];
+  const add = (name, ok, detail) => {
+    checks.push(detail === void 0 ? { name, ok } : { name, ok, detail });
+  };
+  const receipt = signatureResponse?.receipt;
+  if (!receipt || !receipt.signature || !Array.isArray(receipt.event_log)) {
+    add("receipt_present", false, "signature response carried no complete receipt");
+    return { verified: false, checks };
+  }
+  if (!options || typeof options !== "object") {
+    add("verification_context_present", false, "trust anchor and request/response context required");
+    return { verified: false, checks };
+  }
+  const { trustAnchor, requestId, requestBody, responseBody, responseHashField } = options;
+  const contextComplete = Boolean(
+    trustAnchor?.workloadId && trustAnchor?.workloadKeysetDigest && requestId && isReceiptBody(requestBody) && isReceiptBody(responseBody) && (responseHashField === "wire_hash" || responseHashField === "cleartext_hash")
+  );
+  add(
+    "verification_context_present",
+    contextComplete,
+    contextComplete ? void 0 : "trustAnchor, requestId, requestBody, responseBody, and responseHashField are required"
+  );
+  if (!contextComplete) return { verified: false, checks };
+  const unsupportedVersions = [
+    receipt.api_version === "aci/1" ? void 0 : `receipt "${receipt.api_version}"`,
+    signatureResponse.api_version === void 0 || signatureResponse.api_version === "aci/1" ? void 0 : `signature response "${signatureResponse.api_version}"`,
+    attestation?.api_version === void 0 || attestation.api_version === "aci/1" ? void 0 : `attestation "${attestation.api_version}"`
+  ].filter((value) => value !== void 0);
+  add(
+    "api_version_supported",
+    unsupportedVersions.length === 0,
+    unsupportedVersions.length === 0 ? void 0 : `unsupported api_version: ${unsupportedVersions.join(", ")}`
+  );
+  const keyset = attestation?.attestation?.workload_keyset;
+  if (!keyset) {
+    add("keyset_present", false, "attestation carried no workload_keyset");
+    return { verified: false, checks };
+  }
+  const identityKey = keyset.workload_identity?.public_key;
+  const signingKeys = keyset.receipt_signing_keys;
+  const keysetShapeValid = Boolean(
+    identityKey && typeof identityKey.algo === "string" && typeof identityKey.public_key === "string" && Array.isArray(signingKeys) && signingKeys.every(
+      (key) => key && typeof key === "object" && typeof key.key_id === "string" && typeof key.algo === "string" && typeof key.public_key === "string"
+    )
+  );
+  if (!keysetShapeValid) {
+    add("keyset_well_formed", false, "workload identity or receipt signing keys are malformed");
+    return { verified: false, checks };
+  }
+  let keysetDigest;
+  let workloadId;
+  try {
+    keysetDigest = computeWorkloadKeysetDigest(keyset);
+    workloadId = computeWorkloadId(identityKey);
+  } catch (error) {
+    add(
+      "keyset_well_formed",
+      false,
+      `invalid workload keyset: ${error instanceof Error ? error.message : String(error)}`
+    );
+    return { verified: false, checks };
+  }
+  add("keyset_well_formed", true);
+  add(
+    "keyset_digest_matches_trust_anchor",
+    keysetDigest === trustAnchor.workloadKeysetDigest,
+    keysetDigest === trustAnchor.workloadKeysetDigest ? void 0 : `computed ${keysetDigest}, trusted ${trustAnchor.workloadKeysetDigest}`
+  );
+  add(
+    "attestation_keyset_digest_matches_trust_anchor",
+    attestation.workload_keyset_digest === trustAnchor.workloadKeysetDigest,
+    attestation.workload_keyset_digest === trustAnchor.workloadKeysetDigest ? void 0 : `attestation says ${attestation.workload_keyset_digest ?? "missing"}`
+  );
+  add(
+    "receipt_keyset_digest_matches_trust_anchor",
+    receipt.workload_keyset_digest === trustAnchor.workloadKeysetDigest,
+    receipt.workload_keyset_digest === trustAnchor.workloadKeysetDigest ? void 0 : `receipt says ${receipt.workload_keyset_digest}`
+  );
+  add(
+    "workload_id_matches_trust_anchor",
+    workloadId === trustAnchor.workloadId && attestation.workload_id === trustAnchor.workloadId && receipt.workload_id === trustAnchor.workloadId,
+    workloadId === trustAnchor.workloadId && attestation.workload_id === trustAnchor.workloadId && receipt.workload_id === trustAnchor.workloadId ? void 0 : `computed ${workloadId}, attestation ${attestation.workload_id ?? "missing"}, receipt ${receipt.workload_id ?? "missing"}, trusted ${trustAnchor.workloadId}`
+  );
+  const entry = signingKeys.find(
+    (key) => key.key_id === receipt.signature.key_id
+  );
+  add(
+    "key_in_trusted_keyset",
+    Boolean(entry),
+    entry ? void 0 : `key_id "${receipt.signature.key_id}" is not in receipt_signing_keys`
+  );
+  if (entry) {
+    const algoMatches = entry.algo === receipt.signature.algo;
+    add(
+      "key_algo_matches",
+      algoMatches,
+      algoMatches ? void 0 : `receipt says ${receipt.signature.algo}, keyset says ${entry.algo}`
+    );
+    if (algoMatches && entry.algo === "ed25519") {
+      try {
+        const ok = await verifyEd25519(
+          fromHexBytes(entry.public_key),
+          fromHexBytes(receipt.signature.value),
+          receiptSigningBytes(receipt)
+        );
+        add("receipt_signature", ok, ok ? void 0 : "Ed25519 verification failed");
+      } catch (error) {
+        add(
+          "receipt_signature",
+          false,
+          `Ed25519 unavailable or input rejected: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    } else if (algoMatches) {
+      add("receipt_signature", false, `unsupported receipt signing algorithm "${entry.algo}"`);
+    }
+  }
+  add(
+    "chat_id_matches_request",
+    receipt.chat_id === requestId,
+    receipt.chat_id === requestId ? void 0 : `receipt is for ${receipt.chat_id}, expected ${requestId}`
+  );
+  const requestEvent = exactlyOneEvent(receipt, "request.received");
+  const requestHash = hashReceiptBody(requestBody);
+  add(
+    "request_body_hash_matches",
+    requestEvent?.body_hash === requestHash,
+    requestEvent?.body_hash === requestHash ? void 0 : `computed ${requestHash}, receipt says ${requestEvent?.body_hash ?? "missing or ambiguous event"}`
+  );
+  const responseEvent = exactlyOneEvent(receipt, "response.returned");
+  const responseHash = hashReceiptBody(responseBody);
+  const receiptResponseHash = responseEvent?.[responseHashField];
+  add(
+    "response_body_hash_matches",
+    receiptResponseHash === responseHash,
+    receiptResponseHash === responseHash ? void 0 : `computed ${responseHash}, receipt ${responseHashField} says ${typeof receiptResponseHash === "string" ? receiptResponseHash : "missing or ambiguous event"}`
+  );
+  const rawAttestationAddress = attestation.signing_address;
+  const rawSignatureAddress = signatureResponse.signing_address;
+  const attestationAddress = typeof rawAttestationAddress === "string" ? rawAttestationAddress.toLowerCase() : void 0;
+  const signatureAddress = typeof rawSignatureAddress === "string" ? rawSignatureAddress.toLowerCase() : void 0;
+  if (rawAttestationAddress !== void 0 || rawSignatureAddress !== void 0) {
+    add(
+      "signing_address_cross_check",
+      Boolean(attestationAddress && signatureAddress && attestationAddress === signatureAddress),
+      attestationAddress && signatureAddress && attestationAddress === signatureAddress ? void 0 : `${signatureAddress ?? "missing"} vs attestation ${attestationAddress ?? "missing"}`
+    );
+  }
+  return { verified: checks.length > 0 && checks.every((check) => check.ok), checks };
+}
+
 // src/index.ts
 var DEFAULT_BASE_URL = "https://api.venice.ai";
 var DEFAULT_SESSION_TTL = 30 * 60 * 1e3;
@@ -1696,6 +2195,18 @@ function createVeniceE2EE(options) {
   async function* decryptStream(body, session) {
     yield* decryptSSEStream(body, session.privateKey, allowPlaintextResponses);
   }
+  async function fetchResponseSignature(modelId, requestId) {
+    const url = `${baseUrl}/api/v1/tee/signature?model=${encodeURIComponent(modelId)}&request_id=${encodeURIComponent(requestId)}`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+    if (!res.ok) {
+      throw new Error(`TEE signature fetch failed (${res.status}): ${await res.text()}`);
+    }
+    return res.json();
+  }
+  async function attest(modelId) {
+    const { response } = await fetchAttestation(modelId);
+    return response;
+  }
   function clearSession() {
     if (_session) {
       _session.privateKey.fill(0);
@@ -1704,9 +2215,11 @@ function createVeniceE2EE(options) {
   }
   return {
     createSession,
+    attest,
     encrypt,
     decryptChunk: decrypt,
     decryptStream,
+    fetchResponseSignature,
     clearSession
   };
 }
@@ -1720,6 +2233,8 @@ export {
   TOOL_RESPONSE_OPEN,
   ToolCallStreamParser,
   buildToolSystemPrompt,
+  computeWorkloadId,
+  computeWorkloadKeysetDigest,
   createVeniceE2EE,
   decryptChunk,
   decryptSSEStream,
@@ -1730,11 +2245,16 @@ export {
   fromHex,
   generateKeypair,
   generateToolCallId,
+  hashReceiptBody,
   isE2EEModel,
+  jcsStringify,
   parseToolCalls,
+  receiptSigningBytes,
   renderToolMessages,
+  sha256Prefixed,
   toHex,
-  verifyAttestation
+  verifyAttestation,
+  verifyReceipt
 };
 /*! Bundled license information:
 

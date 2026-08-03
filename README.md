@@ -91,6 +91,8 @@ Returns an object with:
 - **`encrypt(messages, session)`** — Encrypts an array of `{role, content}` messages. Returns `{ encryptedMessages, headers, veniceParameters }`.
 - **`decryptChunk(hexChunk, session)`** — Decrypts one response chunk. Non-whitespace plaintext fails closed by default.
 - **`decryptStream(body, session)`** — Parses an SSE stream and yields decrypted text chunks. A successful response containing plaintext model output fails closed by default.
+- **`attest(modelId)`** — Fetches Venice's raw compatibility attestation response. It is evidence, not a receipt trust anchor by itself.
+- **`fetchResponseSignature(modelId, requestId)`** — Fetches the signed ACI receipt wrapper for a completion.
 - **`clearSession()`** — Zeroizes the private key and clears the cached session.
 
 ## Attestation verification
@@ -155,6 +157,53 @@ Venice does not currently publish a stable measurement allowlist in its public E
 ### `isE2EEModel(modelId)`
 
 Returns `true` if the model ID starts with `e2ee-`.
+
+## Response receipt verification
+
+`verifyReceipt()` verifies an ACI receipt only when the caller supplies all three trust
+boundaries: an independently established workload/keyset anchor, the completion ID, and
+the exact request and response bytes.
+
+```js
+import { verifyReceipt } from 'venice-e2ee';
+
+const attestation = await e2ee.attest(modelId);
+const signatureResponse = await e2ee.fetchResponseSignature(modelId, completion.id);
+
+const verification = await verifyReceipt(signatureResponse, attestation, {
+  // Pin these from a canonical ACI report whose quote/report-data binding was
+  // verified independently. Do not copy them from an unverified response.
+  trustAnchor: {
+    workloadId: 'sha256:<trusted-workload-id>',
+    workloadKeysetDigest: 'sha256:<trusted-keyset-digest>',
+  },
+  requestId: completion.id,
+  requestBody: exactRequestBytes,
+  responseBody: exactResponseBytes,
+  responseHashField: 'wire_hash', // or 'cleartext_hash', chosen explicitly
+});
+
+if (!verification.verified) {
+  throw new Error(JSON.stringify(verification.checks));
+}
+```
+
+The verifier checks the workload id and full keyset against the trust anchor, the receipt
+signature under that keyset, the mandatory completion id, and the request/response hashes.
+Missing context, missing or duplicate receipt events, unsupported protocol versions, and
+malformed signatures all fail closed.
+
+> **Trust-anchor requirement:** Venice's `/api/v1/tee/attestation` compatibility quote
+> binds its E2EE key and nonce, not the ACI `workload_keyset_digest`. Its self-described
+> `workload_id` and `workload_keyset_digest` therefore cannot establish this trust anchor.
+> Pin values obtained from a separately verified canonical ACI attestation path. If no such
+> path or pin is available, receipt verification must remain unavailable rather than treating
+> two provider-controlled values as proof.
+
+For responses transformed after leaving the gateway, the bytes in hand may not reproduce
+the receipt's `cleartext_hash`. Select `wire_hash` only for the exact wire representation or
+`cleartext_hash` only when the gateway's pre-encryption serialization is available; never
+substitute the hash copied from the receipt itself.
 
 ## Function calling
 
@@ -322,11 +371,11 @@ stays ciphertext.
 - TDX quote signature chain (available via optional DCAP verifier)
 - NVIDIA GPU attestation
 - TEE code measurements
-- Response signatures or a cryptographic binding between each response chunk's ephemeral key and the attested signing key
+- Response receipts unless the caller supplies an independently established workload/keyset trust anchor and exact request/response bytes
 
 **Visible metadata:** The library encrypts message `content`, not the surrounding HTTP request. Venice can observe authentication, model selection, roles, token and streaming settings, request structure, timing, sizes, billing information, and network metadata.
 
-**Response origin:** AES-GCM authenticates each chunk under a key derived from the client key and the chunk's server-supplied ephemeral key. The current streaming format does not itself prove that this ephemeral key belongs to the attested enclave. Venice documents a separate response-signature endpoint, but its signed payload format is not yet implemented here.
+**Response origin:** AES-GCM authenticates each chunk under a key derived from the client key and the chunk's server-supplied ephemeral key. The current streaming format does not itself prove that this ephemeral key belongs to the attested enclave. Receipt verification is available as a separate, fail-closed operation with the trust-anchor and byte-binding requirements above.
 
 ## Development
 
