@@ -2,7 +2,7 @@
 
 This changelog summarizes user-visible changes to `venice-e2ee`. It also calls out the privacy and verification limits that matter when deciding whether to use a release.
 
-## Unreleased
+## 0.3.0 — 2026-08-03
 
 ### Function calling over E2EE
 
