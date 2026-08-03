@@ -76,7 +76,7 @@ export interface E2EESession {
 }
 
 export interface EncryptedPayload {
-  encryptedMessages: Array<{ role: string; content: string }>;
+  encryptedMessages: Array<{ role: string; content: string; tool_call_id?: string }>;
   headers: Record<string, string>;
   veniceParameters: { enable_e2ee: true };
 }

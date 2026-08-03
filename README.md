@@ -156,6 +156,101 @@ Venice does not currently publish a stable measurement allowlist in its public E
 
 Returns `true` if the model ID starts with `e2ee-`.
 
+## Function calling
+
+Venice's E2EE gateway drops the OpenAI `tools` request parameter — a request carrying
+encrypted messages reaches the model with no tool schemas attached. (The same model
+returns native tool calls when the E2EE headers are absent, so this is a property of the
+encrypted path.) Sending `tools` anyway would leak every schema in plaintext *and* leave
+the model unable to use them.
+
+These helpers instead carry function calling inside the encrypted channel, so tool names,
+descriptions, arguments and results stay ciphertext like the rest of the conversation.
+
+```js
+import {
+  createVeniceE2EE,
+  buildToolSystemPrompt,
+  renderToolMessages,
+  ToolCallStreamParser,
+} from 'venice-e2ee';
+
+const tools = [{
+  type: 'function',
+  function: {
+    name: 'get_weather',
+    description: 'Get the current weather in a given city',
+    parameters: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] },
+  },
+}];
+
+// 1. Fold tool schemas and any prior tool-call history into message content.
+const toolPrompt = buildToolSystemPrompt(tools, 'auto');
+const messages = [
+  { role: 'system', content: toolPrompt },
+  ...renderToolMessages(conversation),
+];
+
+// 2. Encrypt and send as usual — no `tools` field on the request.
+const { encryptedMessages, headers, veniceParameters } = await e2ee.encrypt(messages, session);
+
+// 3. Parse tool calls back out of the decrypted stream. Pass the schemas: they
+//    let the parser coerce arguments and recognise an untagged call.
+const parser = new ToolCallStreamParser({ tools });
+for await (const text of e2ee.decryptStream(response.body, session)) {
+  const { content, toolCalls } = parser.push(text);
+  if (content) process.stdout.write(content);
+  for (const call of toolCalls) console.log('tool call:', call.function.name, call.function.arguments);
+}
+const tail = parser.flush();
+// parser.sawToolCall === true  →  finish_reason should be 'tool_calls'
+```
+
+| Export | Purpose |
+|---|---|
+| `buildToolSystemPrompt(tools, toolChoice?)` | Render tool schemas into a system prompt. Returns `null` for `tool_choice: 'none'` or an empty list. |
+| `renderToolMessages(messages)` | Fold assistant `tool_calls` and `tool` results into plain message content, dropping the plaintext `tool_calls` field. |
+| `ToolCallStreamParser` | Incremental parser splitting tool-call blocks from prose. `new ToolCallStreamParser({ tools })`; `push(chunk)` → `{content, toolCalls}`; `flush()` at end of stream. |
+| `parseToolCalls(text, options?)` | One-shot version for a complete response body. |
+| `generateToolCallId()` | Random OpenAI-style `call_…` id. |
+
+The model is following a prompt rather than a constrained decoder, so the parser accepts a
+good deal more than the format the prompt asks for:
+
+- tags split across stream chunks, and markdown fences around the payload
+- missing closing tags, and the chained `<tool_call>{..}<tool_call>{..}</tool_call>` form
+  GLM emits for parallel calls
+- `<function_call>` and `<|tool_call|>` in place of `<tool_call>`
+- several calls in one block, as a JSON array or a `{"tool_calls": [...]}` wrapper
+- `tool_name`/`tool` for the name, `parameters`/`args`/`input` for the arguments, and the
+  OpenAI-shaped `{"function": {"name", "arguments"}}` nesting
+- a call emitted with no tags at all — accepted only when it names one of the tools in
+  `options.tools`, so a model asked to answer in JSON still returns JSON
+- a lone argument passed bare (`"arguments": "Bratislava"`), wrapped using the schema when
+  the function declares exactly one parameter
+- **GLM's native `<arg_key>`/`<arg_value>` body**, including the degenerate forms it
+  actually produces. GLM was trained on that template and uses the same `<tool_call>` tag
+  this prompt asks for, so it blends the two and the tags come out lossy — a different
+  subset survives each time. All of these are verbatim from `e2ee-glm-5-2-p` and all parse:
+
+  ```
+  <tool_call>read</arg_value>filePath</arg_key><arg_value>/Users/juraj/…</arg_value></tool_call>
+  <tool_call>glob<arg_key>pattern "**/opencode.json"</arg_value></tool_call>
+  ```
+
+- the same body with the tags gone entirely and only their contents left, one per line.
+  Nothing marks that as a call rather than prose, so it is accepted only when the first
+  line names a tool in `options.tools` and every key is one of its declared properties.
+
+A block that yields no call is never discarded — it comes back as visible content, tags
+and all. Losing it silently costs the caller the whole turn with nothing to debug.
+
+Passing `tools` is what enables the last two; without it the parser still works, but only
+on tagged blocks and without argument coercion.
+
+A model can still emit a call that is malformed or invents a function — validate names and
+arguments before acting on them.
+
 ### Low-level exports
 
 For custom integrations, the individual crypto and attestation primitives are also exported:
@@ -206,6 +301,13 @@ Client                              Venice TEE (Intel TDX)
 ```
 
 Each response chunk uses a fresh server ephemeral key, so every chunk requires its own ECDH key derivation.
+
+**Every message must be encrypted, whatever its role.** Venice's published examples encrypt
+only `user` and `system` messages, but a request containing any plaintext content — an
+`assistant` turn from the conversation history, for instance — is rejected with
+`400 E2EE decryption failed`. `encrypt()` therefore encrypts every message it is given, and
+`assistant` and `tool` turns decrypt correctly inside the TEE, so the whole conversation
+stays ciphertext.
 
 ## Security
 

@@ -1,5 +1,6 @@
 import { generateKeypair, deriveAESKey, encryptMessage, decryptChunk, toHex, } from './crypto.js';
 import { decryptSSEStream } from './stream.js';
+import { flattenMessageContent } from './tools.js';
 import { verifyAttestation, } from './attestation.js';
 const DEFAULT_BASE_URL = 'https://api.venice.ai';
 const DEFAULT_SESSION_TTL = 30 * 60 * 1000; // 30 minutes
@@ -74,10 +75,20 @@ export function createVeniceE2EE(options) {
         return _session;
     }
     async function encrypt(messages, session) {
-        const encryptedMessages = await Promise.all(messages.map(async (msg) => ({
-            role: msg.role,
-            content: await encryptMessage(session.aesKey, session.publicKey, msg.content),
-        })));
+        // Every role must be encrypted, assistant and tool included: the TEE rejects
+        // a request with any plaintext message content ("E2EE decryption failed"),
+        // so the whole conversation stays ciphertext end to end.
+        const encryptedMessages = await Promise.all(messages.map(async ({ role, content, tool_call_id }) => {
+            const encrypted = {
+                role,
+                content: await encryptMessage(session.aesKey, session.publicKey, flattenMessageContent(content)),
+            };
+            // Venice requires this opaque correlation ID on tool-role messages.
+            if (role === 'tool' && tool_call_id !== undefined) {
+                encrypted.tool_call_id = tool_call_id;
+            }
+            return encrypted;
+        }));
         return {
             encryptedMessages,
             headers: {
@@ -114,4 +125,5 @@ export function isE2EEModel(modelId) {
 export { verifyAttestation, deriveEthAddress } from './attestation.js';
 export { generateKeypair, deriveAESKey, encryptMessage, decryptChunk, toHex, fromHex, } from './crypto.js';
 export { decryptSSEStream } from './stream.js';
+export { buildToolSystemPrompt, renderToolMessages, parseToolCalls, generateToolCallId, flattenMessageContent, ToolCallStreamParser, TOOL_CALL_OPEN, TOOL_CALL_CLOSE, TOOL_RESPONSE_OPEN, TOOL_RESPONSE_CLOSE, } from './tools.js';
 //# sourceMappingURL=index.js.map
