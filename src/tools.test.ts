@@ -541,17 +541,42 @@ describe("GLM's native arg_key/arg_value body", () => {
 
 
 
-    it('keeps a tagged value whole when it contains the closing tag as text', () => {
-      // The format has no escaping, so this is ambiguous. Reading to the last
-      // close rather than the first is the reading that does not silently drop
-      // the tail of the value.
-      const { toolCalls } = parseToolCalls(
+    it('refuses a tagged value that could be read more than one way', () => {
+      // No escaping exists in this format, so `foo</arg_value>bar` is either one
+      // value containing tag text or a value plus stray text — and no rule wins
+      // both that case and the ordinary multi-argument one. Reading the first
+      // close truncates to `foo`; reading the last swallows later arguments.
+      // Refusing is the only answer that is never silently wrong.
+      const { content, toolCalls } = parseToolCalls(
         '<tool_call>grep<arg_key>pattern</arg_key><arg_value>foo</arg_value>bar</arg_value></tool_call>',
+        { tools: [grepTool] }
+      );
+      expect(toolCalls).toHaveLength(0);
+      expect(content).toContain('<tool_call>');
+    });
+
+    it('refuses a tagged value holding the opening key tag as text', () => {
+      // The mirror of the case above: bounding the value at the next `<arg_key>`
+      // truncates a value that contains that text.
+      const { content, toolCalls } = parseToolCalls(
+        '<tool_call>grep<arg_key>pattern</arg_key><arg_value>foo<arg_key>bar</arg_value></tool_call>',
+        { tools: [grepTool] }
+      );
+      expect(toolCalls).toHaveLength(0);
+      expect(content).toContain('<tool_call>');
+    });
+
+    it('still reads ordinary multi-argument tagged bodies', () => {
+      // The refusals above must not cost the well-formed case they protect.
+      const { toolCalls } = parseToolCalls(
+        '<tool_call>grep<arg_key>pattern</arg_key><arg_value>good.?match</arg_value>' +
+          '<arg_key>include</arg_key><arg_value>*.svelte</arg_value></tool_call>',
         { tools: [grepTool] }
       );
       expect(toolCalls).toHaveLength(1);
       expect(JSON.parse(toolCalls[0].function.arguments)).toEqual({
-        pattern: 'foo</arg_value>bar',
+        pattern: 'good.?match',
+        include: '*.svelte',
       });
     });
 

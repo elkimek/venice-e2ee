@@ -548,6 +548,10 @@ function parseArgValue(raw: string): unknown {
 
 const ARG_TAG = /<\/?arg_(?:key|value)>/g;
 const ARG_VALUE_CLOSE = '</arg_value>';
+const ARG_VALUE_OPEN = '<arg_value>';
+const ARG_KEY_OPEN = '<arg_key>';
+/** Any arg tag appearing as literal text where a value is expected. */
+const ANY_ARG_TAG = /<\/?arg_(?:key|value)>/;
 const FUNCTION_NAME = /^[A-Za-z_][\w.-]*$/;
 
 /**
@@ -623,19 +627,26 @@ function parseArgKeyValueBody(
 
     if (tag[0] === '<arg_value>') {
       if (pendingKey !== null) {
-        // The format has no escaping, so a value containing the literal text
-        // `</arg_value>` is ambiguous. Reading to the *last* close before the
-        // next key keeps such a value whole; stopping at the first silently
-        // discarded everything after it.
+        // This format has no escaping, so tag text appearing inside a value is
+        // indistinguishable from a delimiter. No reading wins both cases: the
+        // first close truncates a value that contains one, the last close
+        // swallows the arguments that follow. Rather than pick a guess, take the
+        // well-formed reading and refuse the whole call when the shape says the
+        // input cannot be read that way.
         const rest = text.slice(start);
-        const nextKeyAt = rest.indexOf('<arg_key>');
+        const nextKeyAt = rest.indexOf(ARG_KEY_OPEN);
         const window = nextKeyAt === -1 ? rest : rest.slice(0, nextKeyAt);
-        const lastClose = window.lastIndexOf(ARG_VALUE_CLOSE);
-        args[pendingKey] = parseArgValue(
-          lastClose === -1 ? window : window.slice(0, lastClose)
-        );
+        const closes = window.split(ARG_VALUE_CLOSE).length - 1;
+        const reopens = window.split(ARG_VALUE_OPEN).length - 1;
+
+        // Well-formed is exactly one close, and none for a value the stream cut
+        // short. Anything else is ambiguous.
+        if (reopens > 0 || closes > 1 || (closes === 0 && nextKeyAt !== -1)) return [];
+
+        const close = window.indexOf(ARG_VALUE_CLOSE);
+        args[pendingKey] = parseArgValue(close === -1 ? window : window.slice(0, close));
         pendingKey = null;
-        ARG_TAG.lastIndex = start + (lastClose === -1 ? window.length : lastClose);
+        ARG_TAG.lastIndex = start + (close === -1 ? window.length : close);
         tag = ARG_TAG.exec(text);
         continue;
       } else {
@@ -644,7 +655,14 @@ function parseArgKeyValueBody(
         // but guessing wrong invents one, so it only counts when the schema
         // confirms the key is real.
         const assigned = KEY_ASSIGNMENT.exec(segment.trim());
-        if (assigned && declared?.has(assigned[1])) takeKey(segment);
+        if (!assigned || !declared?.has(assigned[1])) {
+          // Nothing here identifies a real argument; leave it be.
+        } else if (ANY_ARG_TAG.test(segment.slice(assigned[0].length))) {
+          // Tag text inside the value it carries — same ambiguity, same answer.
+          return [];
+        } else {
+          takeKey(segment);
+        }
       }
     } else if (tag[0] === '<arg_key>' || pendingKey === null) {
       // Closing tags should be followed by nothing, but when the opening tag is

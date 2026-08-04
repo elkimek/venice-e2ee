@@ -844,6 +844,9 @@ function parseArgValue(raw) {
 }
 var ARG_TAG = /<\/?arg_(?:key|value)>/g;
 var ARG_VALUE_CLOSE = "</arg_value>";
+var ARG_VALUE_OPEN = "<arg_value>";
+var ARG_KEY_OPEN = "<arg_key>";
+var ANY_ARG_TAG = /<\/?arg_(?:key|value)>/;
 var FUNCTION_NAME = /^[A-Za-z_][\w.-]*$/;
 var KEY_ASSIGNMENT = /^["'\s]*([A-Za-z_][\w.-]*)["'\]\s]*[:=]\s*/;
 function declaredProperties(fn) {
@@ -886,19 +889,25 @@ function parseArgKeyValueBody(text, lookup) {
     if (tag[0] === "<arg_value>") {
       if (pendingKey !== null) {
         const rest = text.slice(start);
-        const nextKeyAt = rest.indexOf("<arg_key>");
+        const nextKeyAt = rest.indexOf(ARG_KEY_OPEN);
         const window = nextKeyAt === -1 ? rest : rest.slice(0, nextKeyAt);
-        const lastClose = window.lastIndexOf(ARG_VALUE_CLOSE);
-        args[pendingKey] = parseArgValue(
-          lastClose === -1 ? window : window.slice(0, lastClose)
-        );
+        const closes = window.split(ARG_VALUE_CLOSE).length - 1;
+        const reopens = window.split(ARG_VALUE_OPEN).length - 1;
+        if (reopens > 0 || closes > 1 || closes === 0 && nextKeyAt !== -1) return [];
+        const close = window.indexOf(ARG_VALUE_CLOSE);
+        args[pendingKey] = parseArgValue(close === -1 ? window : window.slice(0, close));
         pendingKey = null;
-        ARG_TAG.lastIndex = start + (lastClose === -1 ? window.length : lastClose);
+        ARG_TAG.lastIndex = start + (close === -1 ? window.length : close);
         tag = ARG_TAG.exec(text);
         continue;
       } else {
         const assigned = KEY_ASSIGNMENT.exec(segment.trim());
-        if (assigned && declared?.has(assigned[1])) takeKey(segment);
+        if (!assigned || !declared?.has(assigned[1])) {
+        } else if (ANY_ARG_TAG.test(segment.slice(assigned[0].length))) {
+          return [];
+        } else {
+          takeKey(segment);
+        }
       }
     } else if (tag[0] === "<arg_key>" || pendingKey === null) {
       takeKey(segment);
