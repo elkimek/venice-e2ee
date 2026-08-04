@@ -484,6 +484,117 @@ describe("GLM's native arg_key/arg_value body", () => {
         filePath: '/Users/juraj/.config/opencode/opencode.json',
       });
     });
+
+    const grepTool: ToolDefinition = {
+      type: 'function',
+      function: {
+        name: 'grep',
+        parameters: {
+          type: 'object',
+          properties: { pattern: { type: 'string' }, include: { type: 'string' } },
+          required: ['pattern'],
+        },
+      },
+    };
+
+    const taskTool: ToolDefinition = {
+      type: 'function',
+      function: {
+        name: 'task',
+        parameters: {
+          type: 'object',
+          properties: {
+            description: { type: 'string' },
+            prompt: { type: 'string' },
+            subagent_type: { type: 'string' },
+          },
+          required: ['description', 'prompt'],
+        },
+      },
+    };
+
+
+
+
+
+
+    it('recovers line-delimited calls carrying a stray arg tag', () => {
+      // The orphan </arg_value> used to land on a line of its own, breaking the
+      // key/value pairing so the call was dropped without a trace.
+      const { toolCalls } = parseToolCalls(
+        '<tool_call>grep\npattern\nstrong match|good match\n</arg_value></tool_call>' +
+          '<tool_call>grep\npattern\npurple|violet\n</arg_value><arg_key>include\n' +
+          '*.{ts,svelte}\n</arg_value></tool_call>',
+        { tools: [grepTool] }
+      );
+      expect(toolCalls).toHaveLength(2);
+      expect(JSON.parse(toolCalls[0].function.arguments)).toEqual({
+        pattern: 'strong match|good match',
+      });
+      expect(JSON.parse(toolCalls[1].function.arguments)).toEqual({
+        pattern: 'purple|violet',
+        include: '*.{ts,svelte}',
+      });
+    });
+
+
+
+
+
+    it('parses call syntax with bare keys and keeps the escapes intact', () => {
+      const editTool: ToolDefinition = {
+        type: 'function',
+        function: {
+          name: 'edit',
+          parameters: {
+            type: 'object',
+            properties: {
+              filePath: { type: 'string' },
+              oldString: { type: 'string' },
+              newString: { type: 'string' },
+            },
+            required: ['filePath', 'oldString', 'newString'],
+          },
+        },
+      };
+      const { toolCalls } = parseToolCalls(
+        '<tool_call>edit(filePath:"/src/Badge.svelte",' +
+          'oldString:"  .band-strong {\\n    background: var(--accent-bg);\\n  }",' +
+          'newString:"  /* the \\"positive\\" tier */\\n  .band-strong {\\n    background: var(--ok);\\n  }")',
+        { tools: [editTool] }
+      );
+      expect(toolCalls).toHaveLength(1);
+      expect(JSON.parse(toolCalls[0].function.arguments)).toEqual({
+        filePath: '/src/Badge.svelte',
+        oldString: '  .band-strong {\n    background: var(--accent-bg);\n  }',
+        newString: '  /* the "positive" tier */\n  .band-strong {\n    background: var(--ok);\n  }',
+      });
+    });
+
+    it('does not read a parenthesised phrase as a call', () => {
+      const { toolCalls, content } = parseToolCalls('<tool_call>read(the docs first)</tool_call>', {
+        tools: [readTool],
+      });
+      expect(toolCalls).toHaveLength(0);
+      expect(content).toContain('read(the docs first)');
+    });
+
+    it('keeps an argument whose key rode along inside the value tag', () => {
+      const { toolCalls } = parseToolCalls(
+        '<tool_call>task<arg_key>description":"Find the badge</arg_value>' +
+          '<arg_value>prompt":"Search for match strength colors</arg_value>' +
+          '<arg_key>subagent_type":"explore</arg_value></tool_call>',
+        { tools: [taskTool] }
+      );
+      expect(toolCalls).toHaveLength(1);
+      // `prompt` used to be discarded outright: its tag was a value tag with no
+      // key pending, so the whole argument vanished.
+      expect(JSON.parse(toolCalls[0].function.arguments)).toEqual({
+        description: 'Find the badge',
+        prompt: 'Search for match strength colors',
+        subagent_type: 'explore',
+      });
+    });
   });
 });
 
