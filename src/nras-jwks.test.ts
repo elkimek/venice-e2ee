@@ -303,6 +303,50 @@ describe('createNrasTokenVerifier', () => {
     expect(calls).toHaveLength(2);
   });
 
+  it('lets concurrent first requests share one fetch instead of backing off', async () => {
+    // Regression: the failure backoff stamps its timer before the request, so
+    // an in-flight fetch looked exactly like a recent failure. Sessions arriving
+    // during the very first fetch were turned away while the fetch that would
+    // have answered them was still running.
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const calls: string[] = [];
+    const body = await jwksBody();
+
+    const impl = (async (url: string) => {
+      calls.push(url);
+      await gate;
+      return { ok: true, status: 200, json: async () => body, text: async () => '' };
+    }) as unknown as typeof fetch;
+
+    const verify = createNrasTokenVerifier({ fetchImpl: impl, now: () => NOW_MS });
+    const token = await makeToken();
+
+    const inFlight = [verify(token), verify(token), verify(token)];
+    release();
+
+    await expect(Promise.all(inFlight)).resolves.toHaveLength(3);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('propagates the real error when a shared fetch fails', async () => {
+    // Joined callers must see why it failed, not a backoff message.
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const impl = (async () => {
+      await gate;
+      return { ok: false, status: 503, json: async () => null, text: async () => '' };
+    }) as unknown as typeof fetch;
+
+    const verify = createNrasTokenVerifier({ fetchImpl: impl, now: () => NOW_MS });
+    const token = await makeToken();
+    const attempts = [verify(token), verify(token)];
+    release();
+
+    await expect(attempts[0]).rejects.toThrow(/Could not fetch NVIDIA JWKS \(503\)/);
+    await expect(attempts[1]).rejects.toThrow(/Could not fetch NVIDIA JWKS \(503\)/);
+  });
+
   it('rate-limits retries while the key set is failing', async () => {
     const calls: string[] = [];
     const impl = (async (url: string) => {

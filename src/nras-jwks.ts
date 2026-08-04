@@ -331,10 +331,16 @@ export function createNrasTokenVerifier(options: NrasTokenVerifierOptions = {}):
     const fresh = cache !== null && now() - cachedAt < cacheTtlMs;
     if (fresh && cache!.has(kid)) return cache!.get(kid)!;
 
-    // The backoff covers every refetch, not only ones behind a warm cache. With
-    // no cache at all — a cold start while NVIDIA is failing — each session
-    // would otherwise retry, aiming a stampede at a service already in trouble.
-    if (now() - lastFetchAt > MIN_REFETCH_INTERVAL_MS) {
+    // A fetch already running is not a recent failure — join it. Without this,
+    // requests arriving during the very first fetch get turned away by a
+    // backoff meant for failures, while the fetch that would answer them is
+    // still in flight. `lastFetchAt` is stamped before the request precisely so
+    // failures back off, which makes an in-flight fetch look identical to one.
+    //
+    // Otherwise the backoff covers every refetch, warm cache or not: on a cold
+    // start against a failing NVIDIA, each session would retry and aim a
+    // stampede at a service already in trouble.
+    if (inFlight !== null || now() - lastFetchAt > MIN_REFETCH_INTERVAL_MS) {
       const keys = await loadJwks();
       const key = keys.get(kid);
       if (key) return key;
@@ -343,7 +349,8 @@ export function createNrasTokenVerifier(options: NrasTokenVerifierOptions = {}):
 
     if (cache === null) {
       throw new Error(
-        'NVIDIA JWKS is unavailable and no key set is cached (backing off after a recent failure)'
+        'NVIDIA JWKS could not be fetched, and no key set is cached from an earlier attempt. ' +
+        `Waiting ${Math.ceil(MIN_REFETCH_INTERVAL_MS / 1000)}s before asking NVIDIA again.`
       );
     }
     throw new Error(`NVIDIA JWKS has no key for kid ${kid}`);
