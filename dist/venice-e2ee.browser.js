@@ -1860,6 +1860,10 @@ var sha256 = /* @__PURE__ */ createHasher(
 );
 
 // src/receipt.ts
+var BODY_BINDING_CHECKS = [
+  "request_body_hash_matches",
+  "response_body_hash_matches"
+];
 function jcsStringify(value) {
   if (value === null) return "null";
   if (typeof value === "boolean") return value ? "true" : "false";
@@ -2227,6 +2231,7 @@ function isE2EEModel(modelId) {
   return modelId.startsWith("e2ee-");
 }
 export {
+  BODY_BINDING_CHECKS,
   TOOL_CALL_CLOSE,
   TOOL_CALL_OPEN,
   TOOL_RESPONSE_CLOSE,

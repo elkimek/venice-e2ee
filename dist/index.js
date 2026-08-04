@@ -151,7 +151,7 @@ export function isE2EEModel(modelId) {
     return modelId.startsWith('e2ee-');
 }
 export { verifyAttestation, deriveEthAddress } from './attestation.js';
-export { verifyReceipt, receiptSigningBytes, jcsStringify, sha256Prefixed, hashReceiptBody, computeWorkloadId, computeWorkloadKeysetDigest, } from './receipt.js';
+export { verifyReceipt, receiptSigningBytes, jcsStringify, sha256Prefixed, BODY_BINDING_CHECKS, hashReceiptBody, computeWorkloadId, computeWorkloadKeysetDigest, } from './receipt.js';
 export { generateKeypair, deriveAESKey, encryptMessage, decryptChunk, toHex, fromHex, } from './crypto.js';
 export { decryptSSEStream } from './stream.js';
 export { buildToolSystemPrompt, renderToolMessages, parseToolCalls, generateToolCallId, flattenMessageContent, ToolCallStreamParser, TOOL_CALL_OPEN, TOOL_CALL_CLOSE, TOOL_RESPONSE_OPEN, TOOL_RESPONSE_CLOSE, } from './tools.js';

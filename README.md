@@ -205,6 +205,39 @@ the receipt's `cleartext_hash`. Select `wire_hash` only for the exact wire repre
 `cleartext_hash` only when the gateway's pre-encryption serialization is available; never
 substitute the hash copied from the receipt itself.
 
+### Body binding is unreachable behind `api.venice.ai`
+
+Measured against the live API rather than inferred: a client of Venice's public API cannot
+satisfy `request_body_hash_matches` or `response_body_hash_matches` with any byte
+representation it can obtain.
+
+Both fail on the E2EE path and the TEE-only path, streaming and non-streaming, with the
+exact bytes POSTed and the exact bytes received. Four combinations, the same result — which
+places a re-serializing hop between the caller and the enclave that issues the receipt.
+Venice demonstrably re-wraps responses (it adds `cost` and `venice_parameters`), and the
+request-side hashes behave the same way. Only something sitting directly in front of the ACI
+gateway can reproduce these.
+
+The other eleven checks pass, so what a receipt establishes from this vantage point is that
+**the attested enclave signed a receipt for this completion id** under a keyset matching the
+trust anchor — not that the bytes in hand are the ones it produced.
+
+Callers reporting this to a human should separate the two cases. Treating an unreachable
+binding as a failed verification produces an alarm on every completion, which trains people
+to ignore the one that matters:
+
+```js
+import { BODY_BINDING_CHECKS } from 'venice-e2ee';
+
+const failed = verification.checks.filter((check) => !check.ok);
+const bodyBindingOnly =
+  failed.length > 0 && failed.every((check) => BODY_BINDING_CHECKS.includes(check.name));
+```
+
+`verified` remains false in that case, and deliberately so — the library should not decide
+that a missing binding is acceptable. That judgement belongs to the caller, who knows
+whether it sits behind a re-serializing gateway.
+
 ## Function calling
 
 Venice's E2EE gateway drops the OpenAI `tools` request parameter — a request carrying

@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
+  BODY_BINDING_CHECKS,
   computeWorkloadId,
   computeWorkloadKeysetDigest,
   hashReceiptBody,
@@ -181,6 +182,23 @@ describe('verifyReceipt', () => {
     );
     expect(result.verified).toBe(true);
     expect(result.checks.every((check) => check.ok)).toBe(true);
+  });
+
+  it('names exactly the checks a caller behind a re-serializing gateway will see fail', async () => {
+    // Callers of api.venice.ai cannot reproduce either body hash — the bytes are
+    // re-serialized before the enclave sees them. BODY_BINDING_CHECKS lets them
+    // tell that apart from a receipt that is actually wrong, so it has to stay
+    // in step with the names the verifier emits.
+    const fixture = await build();
+    const result = await verifyReceipt(
+      fixture.signatureResponse,
+      fixture.attestation,
+      options(fixture, { requestBody: 'other bytes', responseBody: 'other bytes' })
+    );
+
+    expect(result.verified).toBe(false);
+    const failed = result.checks.filter((check) => !check.ok).map((check) => check.name);
+    expect(failed.sort()).toEqual([...BODY_BINDING_CHECKS].sort());
   });
 
   it('fails closed when an untyped caller omits verification context', async () => {
