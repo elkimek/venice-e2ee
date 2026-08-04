@@ -166,7 +166,7 @@ const gpuVerifier = createNvidiaVerifier({
 
 Every token is checked, overall and per-GPU, and any failure rejects the whole result — there is no path where an unverified token's claims get used. `gpu.tokensVerified` reports whether this ran. Alongside the signature it pins the algorithm to ES384 (so a token cannot negotiate itself down to `none`), and checks `iss`, `exp` and `nbf`.
 
-NVIDIA rotates these signing certificates about every 48 hours, so the key set is cached for 15 minutes and refetched when a token names an unknown `kid`, rate-limited so a malformed token cannot turn into a request flood.
+The signing certificate's own validity window is enforced per token, which is what bounds a withdrawn key: NVIDIA issues these leaves for about 48 hours (measured, not assumed), so a key that leaves the published set stops working on NVIDIA's schedule rather than on the cache's. That in turn means the key set does not need frequent polling — it is cached for 12 hours, and refetched whenever a token names a `kid` not held, rate-limited so a malformed token cannot turn into a request flood.
 
 What this buys beyond the TLS default: the token stands on its own. It can be relayed by the provider, cached, logged, or handed to someone else, and still be checkable — which is the groundwork for verifying GPU evidence without a round trip to NVIDIA per session.
 

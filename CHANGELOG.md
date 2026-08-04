@@ -15,7 +15,7 @@ This changelog summarizes user-visible changes to `venice-e2ee`. It also calls o
 
 - Added `createNrasTokenVerifier()` (exported from `venice-e2ee/nvidia`) and the `tokenVerifier` option on `createNvidiaVerifier()`. Tokens are checked with ES384 against NVIDIA's published key set instead of resting on TLS to NRAS, so a token stays checkable when relayed, cached, or logged.
 - The algorithm is pinned to ES384 rather than read from the token, closing the algorithm-confusion family including `alg: none`. `iss`, `exp` and `nbf` are checked, and every token is verified — overall and per-GPU — with any failure rejecting the whole result.
-- The key set is cached for 15 minutes and refetched on an unknown `kid`, rate-limited so malformed tokens cannot become a request flood at NVIDIA. NVIDIA rotates these certificates roughly every 48 hours.
+- The signing certificate's validity window is enforced per token. This is what bounds a withdrawn key — NVIDIA issues these leaves for about 48 hours — so the key set is cached for 12 hours rather than polled, and refetched on an unknown `kid`, rate-limited so malformed tokens or a failing NVIDIA cannot become a request flood.
 - `pinnedCertSha256` requires named certificates to appear in the token's `x5c` chain for operators who obtained NVIDIA's intermediate or root out of band; `chainSha256` reports the digests. This is not RFC 5280 path validation, and the README says so — the leaf is required to carry the JWK's public key rather than a hand-rolled X.509 validator being introduced.
 - `GpuVerifyResult.tokensVerified` reports whether signatures were checked.
 

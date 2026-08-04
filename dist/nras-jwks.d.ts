@@ -61,6 +61,16 @@ export interface VerifiedNrasToken {
 export type NrasTokenVerifier = (token: string) => Promise<VerifiedNrasToken>;
 /** Decode base64url to bytes. Browser-safe: no Buffer. */
 export declare function base64UrlToBytes(input: string): Uint8Array;
+/**
+ * Read notBefore/notAfter from a DER certificate, in ms since epoch.
+ *
+ * Walks Certificate -> TBSCertificate -> {version?, serialNumber, signature,
+ * issuer, validity}, which is fixed ordering in RFC 5280.
+ */
+export declare function certificateValidity(der: Uint8Array): {
+    notBefore: number;
+    notAfter: number;
+};
 /** Split a JWT into its three parts, rejecting anything that is not one. */
 export declare function splitJwt(token: string): {
     header: string;

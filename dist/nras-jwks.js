@@ -34,10 +34,22 @@ export const NRAS_JWKS_URL = 'https://nras.attestation.nvidia.com/.well-known/jw
 /** The only issuer these tokens may claim. */
 export const NRAS_ISSUER = 'https://nras.attestation.nvidia.com';
 /**
- * NVIDIA rotates NRAS signing certificates roughly every 48 hours, so a long
- * cache guarantees misses. Refetching is also triggered by an unknown `kid`.
+ * How long a fetched key set may be reused.
+ *
+ * Deliberately long, because neither job this could do needs it short:
+ *
+ *  - Rotation is handled by refetching when a token names an unknown `kid`,
+ *    which needs no TTL at all.
+ *  - A key being *withdrawn* is invisible to that check, but the signing
+ *    certificates carry their own ~48-hour expiry, and that is enforced per
+ *    token. So a withdrawn key stops working on NVIDIA's schedule rather than
+ *    on the cache's, and polling faster buys almost nothing.
+ *
+ * NVIDIA publishes no Cache-Control, ETag or Expires on the key set, so there
+ * is nothing to honour and the value is ours to choose. Twelve hours keeps the
+ * set from going indefinitely stale without turning verification into a poll.
  */
-const DEFAULT_CACHE_TTL_MS = 15 * 60 * 1000;
+const DEFAULT_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
 /** Smallest gap between refetches provoked by an unknown kid, so a bad token cannot spam NVIDIA. */
 const MIN_REFETCH_INTERVAL_MS = 30 * 1000;
 const DEFAULT_CLOCK_SKEW_SEC = 60;
@@ -62,6 +74,89 @@ function toBuffer(bytes) {
 }
 async function sha256Hex(bytes) {
     return bytesToHex(new Uint8Array(await crypto.subtle.digest('SHA-256', toBuffer(bytes))));
+}
+function readTlv(der, offset) {
+    if (offset + 2 > der.length)
+        throw new Error('Certificate is truncated');
+    const tag = der[offset];
+    let p = offset + 1;
+    let len = der[p++];
+    if (len & 0x80) {
+        const count = len & 0x7f;
+        if (count === 0 || count > 4)
+            throw new Error('Unsupported certificate length encoding');
+        len = 0;
+        for (let i = 0; i < count; i++) {
+            if (p >= der.length)
+                throw new Error('Certificate is truncated');
+            len = len * 256 + der[p++];
+        }
+    }
+    const valueEnd = p + len;
+    if (valueEnd > der.length)
+        throw new Error('Certificate is truncated');
+    return { tag, valueStart: p, valueEnd, next: valueEnd };
+}
+const TAG_INTEGER = 0x02;
+const TAG_SEQUENCE = 0x30;
+const TAG_UTC_TIME = 0x17;
+const TAG_GENERALIZED_TIME = 0x18;
+const TAG_CONTEXT_0 = 0xa0;
+function parseAsn1Time(der, tlv) {
+    const text = new TextDecoder().decode(der.subarray(tlv.valueStart, tlv.valueEnd));
+    let year;
+    let rest;
+    if (tlv.tag === TAG_UTC_TIME) {
+        // YYMMDDHHMMSSZ, with the RFC 5280 pivot at 50.
+        const yy = Number(text.slice(0, 2));
+        year = yy >= 50 ? 1900 + yy : 2000 + yy;
+        rest = text.slice(2);
+    }
+    else if (tlv.tag === TAG_GENERALIZED_TIME) {
+        year = Number(text.slice(0, 4));
+        rest = text.slice(4);
+    }
+    else {
+        throw new Error('Certificate validity is not an ASN.1 time');
+    }
+    const value = Date.UTC(year, Number(rest.slice(0, 2)) - 1, Number(rest.slice(2, 4)), Number(rest.slice(4, 6)), Number(rest.slice(6, 8)), Number(rest.slice(8, 10)) || 0);
+    if (Number.isNaN(value))
+        throw new Error('Certificate validity is not a parsable time');
+    return value;
+}
+/**
+ * Read notBefore/notAfter from a DER certificate, in ms since epoch.
+ *
+ * Walks Certificate -> TBSCertificate -> {version?, serialNumber, signature,
+ * issuer, validity}, which is fixed ordering in RFC 5280.
+ */
+export function certificateValidity(der) {
+    const cert = readTlv(der, 0);
+    if (cert.tag !== TAG_SEQUENCE)
+        throw new Error('Certificate is not a DER SEQUENCE');
+    const tbs = readTlv(der, cert.valueStart);
+    if (tbs.tag !== TAG_SEQUENCE)
+        throw new Error('Certificate has no TBSCertificate');
+    let field = readTlv(der, tbs.valueStart);
+    if (field.tag === TAG_CONTEXT_0)
+        field = readTlv(der, field.next); // optional version
+    if (field.tag !== TAG_INTEGER)
+        throw new Error('Certificate has no serial number');
+    field = readTlv(der, field.next);
+    if (field.tag !== TAG_SEQUENCE)
+        throw new Error('Certificate has no signature algorithm');
+    field = readTlv(der, field.next);
+    if (field.tag !== TAG_SEQUENCE)
+        throw new Error('Certificate has no issuer');
+    const validity = readTlv(der, field.next);
+    if (validity.tag !== TAG_SEQUENCE)
+        throw new Error('Certificate has no validity period');
+    const notBefore = readTlv(der, validity.valueStart);
+    const notAfter = readTlv(der, notBefore.next);
+    return {
+        notBefore: parseAsn1Time(der, notBefore),
+        notAfter: parseAsn1Time(der, notAfter),
+    };
 }
 /** Split a JWT into its three parts, rejecting anything that is not one. */
 export function splitJwt(token) {
@@ -104,6 +199,10 @@ export function createNrasTokenVerifier(options = {}) {
         const doFetch = fetchImpl ?? globalThis.fetch;
         if (!doFetch)
             throw new Error('No fetch implementation available for JWKS retrieval');
+        // Stamped before the request, not after a success: a failing NVIDIA would
+        // otherwise leave every session free to retry immediately, turning an
+        // outage into a stampede against the thing that is already struggling.
+        lastFetchAt = now();
         const response = await doFetch(jwksUrl, { headers: { Accept: 'application/json' } });
         if (!response.ok) {
             throw new Error(`Could not fetch NVIDIA JWKS (${response.status})`);
@@ -121,7 +220,6 @@ export function createNrasTokenVerifier(options = {}) {
             throw new Error('NVIDIA JWKS contains no usable keys');
         cache = keys;
         cachedAt = now();
-        lastFetchAt = cachedAt;
         return keys;
     }
     /** Fetch at most once concurrently; parallel sessions share one round trip. */
@@ -133,20 +231,40 @@ export function createNrasTokenVerifier(options = {}) {
         }
         return inFlight;
     }
+    /**
+     * Resolve a kid to its key, refetching when needed.
+     *
+     * Two mechanisms, doing two different jobs — neither replaces the other:
+     *
+     *  - An **unknown kid** refetches, which is how rotation is picked up. This
+     *    handles keys being *added*, and only that.
+     *  - The **TTL** expires a cache that still answers every kid asked of it,
+     *    which is the only way a key being *removed* is ever noticed. NVIDIA
+     *    withdrawing a compromised key is invisible to the kid check, and token
+     *    `exp` does not help: whoever holds the leaked private key mints tokens
+     *    with whatever expiry they like. So the TTL is the revocation window.
+     *
+     * NVIDIA serves this key set with no Cache-Control, ETag, or Expires header,
+     * so there is nothing to honour and the interval is ours to choose. At ~100 KB
+     * per fetch the bandwidth is irrelevant; the TTL is set for how long a
+     * withdrawn key stays trusted, not to save a request.
+     */
     async function keyFor(kid) {
-        const fresh = cache && now() - cachedAt < cacheTtlMs;
+        const fresh = cache !== null && now() - cachedAt < cacheTtlMs;
         if (fresh && cache.has(kid))
             return cache.get(kid);
-        // An unknown kid usually means rotation, so refetch — but not on every
-        // unknown token, or a malformed one turns into a request flood at NVIDIA.
-        if (!fresh || now() - lastFetchAt > MIN_REFETCH_INTERVAL_MS) {
+        // The backoff covers every refetch, not only ones behind a warm cache. With
+        // no cache at all — a cold start while NVIDIA is failing — each session
+        // would otherwise retry, aiming a stampede at a service already in trouble.
+        if (now() - lastFetchAt > MIN_REFETCH_INTERVAL_MS) {
             const keys = await loadJwks();
             const key = keys.get(kid);
             if (key)
                 return key;
+            throw new Error(`NVIDIA JWKS has no key for kid ${kid}`);
         }
-        else if (cache?.has(kid)) {
-            return cache.get(kid);
+        if (cache === null) {
+            throw new Error('NVIDIA JWKS is unavailable and no key set is cached (backing off after a recent failure)');
         }
         throw new Error(`NVIDIA JWKS has no key for kid ${kid}`);
     }
@@ -205,8 +323,21 @@ export function createNrasTokenVerifier(options = {}) {
             throw new Error(`NRAS token signature does not verify under key ${kid}`);
         }
         const chainDer = (key.x5c ?? []).map((c) => base64UrlToBytes(c.replace(/\s+/g, '')));
-        if (chainDer.length > 0 && !leafCarriesKey(chainDer[0], key)) {
-            throw new Error('NRAS certificate chain does not carry the JWK public key');
+        if (chainDer.length > 0) {
+            if (!leafCarriesKey(chainDer[0], key)) {
+                throw new Error('NRAS certificate chain does not carry the JWK public key');
+            }
+            // This is what bounds a withdrawn key. NVIDIA issues these leaves for
+            // about 48 hours, so a key that leaves the published set stops being
+            // usable on its own schedule rather than only when the cache expires.
+            const { notBefore, notAfter } = certificateValidity(chainDer[0]);
+            const skewMs = clockSkewSec * 1000;
+            if (now() > notAfter + skewMs) {
+                throw new Error(`NRAS signing certificate for kid ${kid} expired at ${new Date(notAfter).toISOString()}`);
+            }
+            if (now() + skewMs < notBefore) {
+                throw new Error(`NRAS signing certificate for kid ${kid} is not valid until ${new Date(notBefore).toISOString()}`);
+            }
         }
         const chainSha256 = await Promise.all(chainDer.map(sha256Hex));
         if (pinned.size > 0 && !chainSha256.some((d) => pinned.has(d))) {
