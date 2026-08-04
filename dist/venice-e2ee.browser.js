@@ -904,11 +904,8 @@ function parseArgKeyValueBody(text, lookup) {
     }
   ];
 }
-function stripArgTagsAtLineEdges(text) {
-  return text.split("\n").map(
-    (line) => line.replace(/^(?:\s*<\/?arg_(?:key|value)>)+/, "").replace(/(?:<\/?arg_(?:key|value)>\s*)+$/, "")
-  ).join("\n");
-}
+var ONLY_ARG_TAGS = /^(?:<\/?arg_(?:key|value)>)+$/;
+var LEADING_ARG_TAGS = /^(?:<\/?arg_(?:key|value)>)+/;
 function quoteBareKeys(text) {
   let out = "";
   let inString = false;
@@ -964,7 +961,7 @@ function parseNameThenJsonBody(text, lookup) {
 }
 function parseLineDelimitedBody(text, lookup) {
   if (!lookup || lookup.size === 0) return [];
-  const lines = stripArgTagsAtLineEdges(text).split("\n").map((line) => line.trim()).filter(Boolean);
+  const lines = text.split("\n").map((line) => line.trim()).filter(Boolean).filter((line) => !ONLY_ARG_TAGS.test(line));
   if (lines.length < 3) return [];
   const name = lines[0];
   const fn = lookup.get(name);
@@ -976,7 +973,7 @@ function parseLineDelimitedBody(text, lookup) {
   const declared = new Set(Object.keys(properties));
   const args = {};
   for (let i = 0; i < rest.length; i += 2) {
-    const key = rest[i];
+    const key = rest[i].replace(LEADING_ARG_TAGS, "");
     if (!declared.has(key)) return [];
     args[key] = parseArgValue(rest[i + 1]);
   }

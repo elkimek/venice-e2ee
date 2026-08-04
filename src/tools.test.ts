@@ -541,6 +541,21 @@ describe("GLM's native arg_key/arg_value body", () => {
 
 
 
+    it('leaves a value alone even when it is entirely tag-shaped', () => {
+      // A value at a value position is never rewritten, so grepping for the
+      // literal text of a transport tag survives. The pairing decides what is a
+      // key before any tag is removed, which is what makes that safe.
+      const { toolCalls } = parseToolCalls(
+        '<tool_call>grep\npattern\n</arg_value>foo\ninclude\n*.ts\n</arg_value></tool_call>',
+        { tools: [grepTool] }
+      );
+      expect(toolCalls).toHaveLength(1);
+      expect(JSON.parse(toolCalls[0].function.arguments)).toEqual({
+        pattern: '</arg_value>foo',
+        include: '*.ts',
+      });
+    });
+
     it('leaves tag-shaped text inside a value alone', () => {
       // Searching for the literal text of a transport tag is a legitimate grep.
       // Stripping it from the pattern would produce a call that runs and returns

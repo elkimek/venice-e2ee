@@ -561,24 +561,10 @@ function parseArgKeyValueBody(text, lookup) {
         },
     ];
 }
-/**
- * Remove arg tags only where they act as separators: at the start or end of a
- * line.
- *
- * Removing them everywhere would edit argument values. Searching for the literal
- * text `</arg_value>` is a legitimate `grep`, and deleting it from the pattern
- * yields a call that runs and quietly returns the wrong thing — the exact
- * failure this parser refuses to trade recovery for. In the output this repairs,
- * the orphaned tags always sit against a line boundary.
- */
-function stripArgTagsAtLineEdges(text) {
-    return text
-        .split('\n')
-        .map((line) => line
-        .replace(/^(?:\s*<\/?arg_(?:key|value)>)+/, '')
-        .replace(/(?:<\/?arg_(?:key|value)>\s*)+$/, ''))
-        .join('\n');
-}
+/** A line consisting of nothing but arg tags — a separator, never a value. */
+const ONLY_ARG_TAGS = /^(?:<\/?arg_(?:key|value)>)+$/;
+/** Leading arg tags on a line that still carries content after them. */
+const LEADING_ARG_TAGS = /^(?:<\/?arg_(?:key|value)>)+/;
 /**
  * Quote bare object keys — `{filePath: "x"}` becomes `{"filePath": "x"}` —
  * without touching text inside string values.
@@ -688,13 +674,15 @@ function parseNameThenJsonBody(text, lookup) {
 function parseLineDelimitedBody(text, lookup) {
     if (!lookup || lookup.size === 0)
         return [];
-    // A half-dropped `</arg_value>` or `<arg_key>` is common in this form, and
-    // left in place it becomes a line of its own — which breaks the key/value
-    // pairing below and silently costs the caller the whole call.
-    const lines = stripArgTagsAtLineEdges(text)
+    // A half-dropped `</arg_value>` or `<arg_key>` is common in this form. Lines
+    // that are nothing but tags are separators the model failed to place, so they
+    // are dropped; anything else keeps its text for now. Nothing here edits a line
+    // that might be a value — the positions that decides are not known yet.
+    const lines = text
         .split('\n')
         .map((line) => line.trim())
-        .filter(Boolean);
+        .filter(Boolean)
+        .filter((line) => !ONLY_ARG_TAGS.test(line));
     if (lines.length < 3)
         return [];
     const name = lines[0];
@@ -710,7 +698,13 @@ function parseLineDelimitedBody(text, lookup) {
     const declared = new Set(Object.keys(properties));
     const args = {};
     for (let i = 0; i < rest.length; i += 2) {
-        const key = rest[i];
+        // Now the alternation is fixed, so `rest[i]` is a key and `rest[i + 1]` is
+        // its value. A key may still carry the tag whose partner went missing —
+        // `<arg_key>include` — and stripping it there is safe precisely because a
+        // value can never reach this branch. Values are passed through untouched:
+        // searching for the literal text of a tag is a legitimate thing to do, and
+        // a silently edited pattern would run and return the wrong answer.
+        const key = rest[i].replace(LEADING_ARG_TAGS, '');
         if (!declared.has(key))
             return [];
         args[key] = parseArgValue(rest[i + 1]);
