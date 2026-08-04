@@ -1,32 +1,15 @@
+import { decodeJsonSegment, splitJwt } from './nras-jwks.js';
 /** NVIDIA's public Remote Attestation Service endpoint for GPU evidence. */
 export const NRAS_GPU_URL = 'https://nras.attestation.nvidia.com/v3/attest/gpu';
 /**
  * Decode a JWT payload WITHOUT verifying its signature.
  *
- * Authentication here comes from TLS to NRAS, not from this decode. Callers who
- * need a self-standing proof should verify `rawTokens` against NVIDIA's JWKS.
+ * Used only when no `tokenVerifier` is configured, where authentication comes
+ * from TLS to NRAS rather than from this decode.
  */
 function decodeJwtClaims(token) {
-    const parts = token.split('.');
-    if (parts.length !== 3) {
-        throw new Error('NRAS returned a token that is not a JWT');
-    }
-    const padded = parts[1].replace(/-/g, '+').replace(/_/g, '/')
-        .padEnd(parts[1].length + ((4 - (parts[1].length % 4)) % 4), '=');
-    let json;
-    try {
-        const binary = atob(padded);
-        const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
-        json = new TextDecoder().decode(bytes);
-    }
-    catch {
-        throw new Error('NRAS token payload is not valid base64url');
-    }
-    const claims = JSON.parse(json);
-    if (typeof claims !== 'object' || claims === null) {
-        throw new Error('NRAS token payload is not a JSON object');
-    }
-    return claims;
+    const { payload } = splitJwt(token);
+    return decodeJsonSegment(payload, 'payload');
 }
 function readString(claims, key) {
     const v = claims[key];
@@ -77,7 +60,7 @@ function parseNrasResponse(body) {
  * verbatim so no re-serialization can alter what NVIDIA signs over.
  */
 export function createNvidiaVerifier(options = {}) {
-    const { nrasUrl = NRAS_GPU_URL, fetchImpl } = options;
+    const { nrasUrl = NRAS_GPU_URL, fetchImpl, tokenVerifier } = options;
     return async (nvidiaPayload) => {
         const doFetch = fetchImpl ?? globalThis.fetch;
         if (!doFetch) {
@@ -103,18 +86,25 @@ export function createNvidiaVerifier(options = {}) {
             throw new Error(`NRAS rejected the GPU evidence (${response.status}): ${detail.slice(0, 200)}`);
         }
         const { overall, perGpu } = parseNrasResponse(await response.json());
-        const overallClaims = decodeJwtClaims(overall);
+        // Every token is verified, not just the overall one: the per-GPU tokens
+        // carry the secboot/dbgstat/measres claims the policy acts on.
+        const readClaims = tokenVerifier
+            ? async (token) => (await tokenVerifier(token)).claims
+            : async (token) => decodeJwtClaims(token);
+        const overallClaims = await readClaims(overall);
         const gpus = {};
         for (const [name, token] of Object.entries(perGpu)) {
-            gpus[name] = toGpuClaims(decodeJwtClaims(token));
+            gpus[name] = toGpuClaims(await readClaims(token));
         }
         return {
             overallResult: readBoolean(overallClaims, 'x-nvidia-overall-att-result') === true,
             eatNonce: readString(overallClaims, 'eat_nonce'),
             arch,
             gpus,
+            tokensVerified: tokenVerifier !== undefined,
             rawTokens: { overall, perGpu },
         };
     };
 }
+export { createNrasTokenVerifier, NRAS_JWKS_URL, NRAS_ISSUER, } from './nras-jwks.js';
 //# sourceMappingURL=nvidia.js.map

@@ -35,6 +35,12 @@ export interface GpuVerifyResult {
     arch: string | null;
     /** Per-GPU claims, keyed as NVIDIA labels them ("GPU-0", ...). */
     gpus: Record<string, NvidiaGpuClaims>;
+    /**
+     * Whether every token's ES384 signature was checked against NVIDIA's
+     * published keys. False means the claims rest on TLS to NRAS alone, which
+     * says nothing about a token that arrived by any other route.
+     */
+    tokensVerified: boolean;
     /** Signed tokens as received, for callers who verify them against NVIDIA's JWKS. */
     rawTokens: {
         overall: string;

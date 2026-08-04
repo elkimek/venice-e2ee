@@ -29,6 +29,7 @@
  *    request; it does not show they came from the same machine.
  */
 import type { GpuVerifier } from './types.js';
+import { type NrasTokenVerifier } from './nras-jwks.js';
 /** NVIDIA's public Remote Attestation Service endpoint for GPU evidence. */
 export declare const NRAS_GPU_URL = "https://nras.attestation.nvidia.com/v3/attest/gpu";
 export interface NvidiaVerifierOptions {
@@ -36,6 +37,17 @@ export interface NvidiaVerifierOptions {
     nrasUrl?: string;
     /** Override the fetch implementation. Defaults to global fetch. */
     fetchImpl?: typeof fetch;
+    /**
+     * Verify each returned token's signature against NVIDIA's published keys,
+     * instead of relying on TLS to NRAS alone. Any token that fails rejects the
+     * whole result, so there is no path where an unverified token is used.
+     *
+     * ```ts
+     * import { createNvidiaVerifier, createNrasTokenVerifier } from 'venice-e2ee/nvidia';
+     * const gpuVerifier = createNvidiaVerifier({ tokenVerifier: createNrasTokenVerifier() });
+     * ```
+     */
+    tokenVerifier?: NrasTokenVerifier;
 }
 /**
  * Create a GPU verifier backed by NVIDIA's Remote Attestation Service.
@@ -46,4 +58,5 @@ export interface NvidiaVerifierOptions {
  */
 export declare function createNvidiaVerifier(options?: NvidiaVerifierOptions): GpuVerifier;
 export type { GpuVerifier, GpuVerifyResult, NvidiaGpuClaims } from './types.js';
+export { createNrasTokenVerifier, NRAS_JWKS_URL, NRAS_ISSUER, type NrasTokenVerifier, type NrasTokenVerifierOptions, type VerifiedNrasToken, } from './nras-jwks.js';
 //# sourceMappingURL=nvidia.d.ts.map

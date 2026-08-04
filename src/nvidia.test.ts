@@ -137,7 +137,55 @@ describe('createNvidiaVerifier', () => {
 
   it('rejects a bundle whose overall token is not a JWT', async () => {
     const { impl } = stubFetch([['JWT', 'nonsense'], {}]);
-    await expect(createNvidiaVerifier({ fetchImpl: impl })(PAYLOAD)).rejects.toThrow(/not a JWT/);
+    await expect(createNvidiaVerifier({ fetchImpl: impl })(PAYLOAD)).rejects.toThrow(
+      /well-formed JWT/
+    );
+  });
+
+  it('reports that signatures went unchecked when no token verifier is set', async () => {
+    const { impl } = stubFetch(makeBundle());
+    const result = await createNvidiaVerifier({ fetchImpl: impl })(PAYLOAD);
+    expect(result.tokensVerified).toBe(false);
+  });
+
+  it('runs the token verifier over the overall and every per-GPU token', async () => {
+    const seen: string[] = [];
+    const { impl } = stubFetch(
+      makeBundle({
+        gpus: {
+          'GPU-0': { secboot: true, dbgstat: 'disabled', measres: 'success' },
+          'GPU-1': { secboot: true, dbgstat: 'disabled', measres: 'success' },
+        },
+      })
+    );
+    const result = await createNvidiaVerifier({
+      fetchImpl: impl,
+      tokenVerifier: async (token) => {
+        seen.push(token);
+        const payload = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+        return {
+          claims: JSON.parse(atob(payload.padEnd(payload.length + ((4 - (payload.length % 4)) % 4), '='))),
+          kid: 'test',
+          chainSha256: [],
+        };
+      },
+    })(PAYLOAD);
+
+    expect(seen).toHaveLength(3); // overall + 2 GPUs
+    expect(result.tokensVerified).toBe(true);
+    expect(result.overallResult).toBe(true);
+  });
+
+  it('fails the whole result when any token fails verification', async () => {
+    const { impl } = stubFetch(makeBundle());
+    await expect(
+      createNvidiaVerifier({
+        fetchImpl: impl,
+        tokenVerifier: async () => {
+          throw new Error('signature does not verify under key nv-eat-kid-prod');
+        },
+      })(PAYLOAD)
+    ).rejects.toThrow(/signature does not verify/);
   });
 
   it('reads every GPU in a multi-GPU node', async () => {
