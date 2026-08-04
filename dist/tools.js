@@ -468,6 +468,7 @@ function parseArgValue(raw) {
     }
 }
 const ARG_TAG = /<\/?arg_(?:key|value)>/g;
+const ARG_VALUE_CLOSE = '</arg_value>';
 const FUNCTION_NAME = /^[A-Za-z_][\w.-]*$/;
 /**
  * A key that arrived with its value still attached by a separator, as happens
@@ -531,8 +532,19 @@ function parseArgKeyValueBody(text, lookup) {
         const segment = text.slice(start, next ? next.index : text.length);
         if (tag[0] === '<arg_value>') {
             if (pendingKey !== null) {
-                args[pendingKey] = parseArgValue(segment);
+                // The format has no escaping, so a value containing the literal text
+                // `</arg_value>` is ambiguous. Reading to the *last* close before the
+                // next key keeps such a value whole; stopping at the first silently
+                // discarded everything after it.
+                const rest = text.slice(start);
+                const nextKeyAt = rest.indexOf('<arg_key>');
+                const window = nextKeyAt === -1 ? rest : rest.slice(0, nextKeyAt);
+                const lastClose = window.lastIndexOf(ARG_VALUE_CLOSE);
+                args[pendingKey] = parseArgValue(lastClose === -1 ? window : window.slice(0, lastClose));
                 pendingKey = null;
+                ARG_TAG.lastIndex = start + (lastClose === -1 ? window.length : lastClose);
+                tag = ARG_TAG.exec(text);
+                continue;
             }
             else {
                 // No key is pending, so this value tag has to carry its own key —
@@ -681,8 +693,13 @@ function parseLineDelimitedBody(text, lookup) {
     const lines = text
         .split('\n')
         .map((line) => line.trim())
-        .filter(Boolean)
-        .filter((line) => !ONLY_ARG_TAGS.test(line));
+        .filter(Boolean);
+    // Only a trailing run of tag-only lines is a separator the model misplaced.
+    // Dropping one from the middle would shift the key/value alternation and can
+    // pair a key with somebody else's value, so those are left in place — they
+    // break the parity check below and the call is refused rather than invented.
+    while (lines.length > 0 && ONLY_ARG_TAGS.test(lines[lines.length - 1]))
+        lines.pop();
     if (lines.length < 3)
         return [];
     const name = lines[0];

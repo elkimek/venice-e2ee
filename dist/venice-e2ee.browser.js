@@ -843,6 +843,7 @@ function parseArgValue(raw) {
   }
 }
 var ARG_TAG = /<\/?arg_(?:key|value)>/g;
+var ARG_VALUE_CLOSE = "</arg_value>";
 var FUNCTION_NAME = /^[A-Za-z_][\w.-]*$/;
 var KEY_ASSIGNMENT = /^["'\s]*([A-Za-z_][\w.-]*)["'\]\s]*[:=]\s*/;
 function declaredProperties(fn) {
@@ -884,8 +885,17 @@ function parseArgKeyValueBody(text, lookup) {
     const segment = text.slice(start, next ? next.index : text.length);
     if (tag[0] === "<arg_value>") {
       if (pendingKey !== null) {
-        args[pendingKey] = parseArgValue(segment);
+        const rest = text.slice(start);
+        const nextKeyAt = rest.indexOf("<arg_key>");
+        const window = nextKeyAt === -1 ? rest : rest.slice(0, nextKeyAt);
+        const lastClose = window.lastIndexOf(ARG_VALUE_CLOSE);
+        args[pendingKey] = parseArgValue(
+          lastClose === -1 ? window : window.slice(0, lastClose)
+        );
         pendingKey = null;
+        ARG_TAG.lastIndex = start + (lastClose === -1 ? window.length : lastClose);
+        tag = ARG_TAG.exec(text);
+        continue;
       } else {
         const assigned = KEY_ASSIGNMENT.exec(segment.trim());
         if (assigned && declared?.has(assigned[1])) takeKey(segment);
@@ -961,7 +971,8 @@ function parseNameThenJsonBody(text, lookup) {
 }
 function parseLineDelimitedBody(text, lookup) {
   if (!lookup || lookup.size === 0) return [];
-  const lines = text.split("\n").map((line) => line.trim()).filter(Boolean).filter((line) => !ONLY_ARG_TAGS.test(line));
+  const lines = text.split("\n").map((line) => line.trim()).filter(Boolean);
+  while (lines.length > 0 && ONLY_ARG_TAGS.test(lines[lines.length - 1])) lines.pop();
   if (lines.length < 3) return [];
   const name = lines[0];
   const fn = lookup.get(name);

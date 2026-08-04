@@ -541,6 +541,32 @@ describe("GLM's native arg_key/arg_value body", () => {
 
 
 
+    it('keeps a tagged value whole when it contains the closing tag as text', () => {
+      // The format has no escaping, so this is ambiguous. Reading to the last
+      // close rather than the first is the reading that does not silently drop
+      // the tail of the value.
+      const { toolCalls } = parseToolCalls(
+        '<tool_call>grep<arg_key>pattern</arg_key><arg_value>foo</arg_value>bar</arg_value></tool_call>',
+        { tools: [grepTool] }
+      );
+      expect(toolCalls).toHaveLength(1);
+      expect(JSON.parse(toolCalls[0].function.arguments)).toEqual({
+        pattern: 'foo</arg_value>bar',
+      });
+    });
+
+    it('refuses rather than re-pairs when a tag-only line sits mid-block', () => {
+      // Dropping it would shift the alternation and pair `pattern` with the next
+      // key's name, producing a call nobody asked for. Losing the call is fine;
+      // inventing one is not.
+      const { content, toolCalls } = parseToolCalls(
+        '<tool_call>grep\npattern\n</arg_value>\ninclude\n</tool_call>',
+        { tools: [grepTool] }
+      );
+      expect(toolCalls).toHaveLength(0);
+      expect(content).toContain('<tool_call>');
+    });
+
     it('leaves a value alone even when it is entirely tag-shaped', () => {
       // A value at a value position is never rewritten, so grepping for the
       // literal text of a transport tag survives. The pairing decides what is a
