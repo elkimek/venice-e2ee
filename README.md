@@ -134,7 +134,29 @@ const e2ee = createVeniceE2EE({
 });
 ```
 
-The provided adapter uses Phala PCCS by default. It validates Intel DCAP quote signatures, certificate/TCB collateral, and revocation information. This is stronger than the default binding checks, but it still does not validate NVIDIA GPU evidence or establish that the measured software is approved.
+The provided adapter uses Phala PCCS by default. It validates Intel DCAP quote signatures, certificate/TCB collateral, and revocation information. This is stronger than the default binding checks, but it does not establish that the measured software is approved, and it says nothing about the GPU.
+
+### GPU attestation policy
+
+When the attestation response carries an `nvidia_payload`, that GPU evidence can be checked against NVIDIA's root of trust rather than taken on the provider's word:
+
+```js
+import { createNvidiaVerifier } from 'venice-e2ee/nvidia';
+
+const e2ee = createVeniceE2EE({
+  apiKey: 'your-venice-api-key',
+  gpuVerifier: createNvidiaVerifier(),
+  requireGpu: true,
+});
+```
+
+The verifier submits the payload verbatim to NVIDIA's Remote Attestation Service, which validates the GPU's report against the endorsement chain rooted in a key burned into the die and against NVIDIA's reference measurements for the running VBIOS and driver. The policy then requires `eat_nonce` in NVIDIA's signed token to equal the nonce this session sent, plus `secboot`, `dbgstat: "disabled"` and `measres: "success"` on every GPU named. `requireGpu: true` also fails when no GPU evidence is served at all, so a provider cannot skip the check by omitting the payload.
+
+Three limits are worth stating plainly:
+
+- **The verdict is NVIDIA's, not yours.** The returned tokens are ES384-signed, but this adapter authenticates them by TLS to `nras.attestation.nvidia.com` rather than checking that signature. `session.attestation.gpu.rawTokens` is exposed for callers who want to verify against NVIDIA's JWKS themselves.
+- **It does not prove co-location.** Nothing binds the GPU evidence to the TDX quote in the same response beyond the shared nonce. That shows both were produced for one request, not that they came from one machine — and for Venice's E2EE models the attested CVM reports `num_gpus: 0`, so they demonstrably are not.
+- **It costs a round trip** to NVIDIA per session, and discloses to NVIDIA that the evidence was checked.
 
 ### Measurement policy
 
@@ -369,7 +391,7 @@ stays ciphertext.
 
 **Not verified client-side by default:**
 - TDX quote signature chain (available via optional DCAP verifier)
-- NVIDIA GPU attestation
+- NVIDIA GPU attestation (available via optional GPU verifier; NVIDIA's verdict, not an independent quote check, and not bound to the TDX quote)
 - TEE code measurements
 - Response receipts unless the caller supplies an independently established workload/keyset trust anchor and exact request/response bytes
 

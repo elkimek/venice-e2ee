@@ -129,7 +129,7 @@ export async function verifyAttestation(response, clientNonce, verifierOrOptions
     const options = typeof verifierOrOptions === 'function'
         ? { dcapVerifier: verifierOrOptions }
         : verifierOrOptions ?? {};
-    const { dcapVerifier, requireDcap = false, expectedMeasurements, expectedModelId } = options;
+    const { dcapVerifier, requireDcap = false, gpuVerifier, requireGpu = false, expectedMeasurements, expectedModelId, } = options;
     const errors = [];
     let nonceVerified = false;
     let signingKeyBound = false;
@@ -140,6 +140,8 @@ export async function verifyAttestation(response, clientNonce, verifierOrOptions
     let dcapVerified = false;
     let measurements;
     let measurementsVerified = null;
+    let gpu;
+    let gpuVerified = false;
     const result = () => ({
         nonceVerified,
         signingKeyBound,
@@ -148,6 +150,8 @@ export async function verifyAttestation(response, clientNonce, verifierOrOptions
         serverVerified,
         dcap,
         dcapVerified,
+        gpu,
+        gpuVerified,
         measurements,
         measurementsVerified,
         verificationLevel: dcapVerified
@@ -278,6 +282,60 @@ export async function verifyAttestation(response, clientNonce, verifierOrOptions
         }
         catch (e) {
             errors.push(`DCAP verification failed: ${e.message}`);
+        }
+    }
+    // Check 6: GPU attestation against NVIDIA's root of trust (if verifier provided).
+    //
+    // The nonce comparison is the load-bearing part. NVIDIA will happily vouch for
+    // any well-formed evidence; only `eat_nonce` ties its verdict to the challenge
+    // this session issued, rather than to a report captured earlier.
+    if (gpuVerifier && response.nvidia_payload) {
+        const errorsBeforeGpu = errors.length;
+        try {
+            gpu = await gpuVerifier(response.nvidia_payload);
+            if (!gpu.overallResult) {
+                errors.push('NVIDIA did not vouch for the GPU evidence (overall attestation result false)');
+            }
+            if (gpu.eatNonce === null) {
+                errors.push('NVIDIA attestation token carries no eat_nonce to bind it to this request');
+            }
+            else if (normalizeMeasurement(gpu.eatNonce) !== clientNonceHex) {
+                errors.push('NVIDIA attestation token eat_nonce does not match the nonce sent — the GPU evidence ' +
+                    'describes some other request');
+            }
+            for (const [name, claims] of Object.entries(gpu.gpus)) {
+                if (claims.debugStatus !== null && claims.debugStatus !== 'disabled') {
+                    errors.push(`GPU ${name} is in debug mode (dbgstat=${claims.debugStatus})`);
+                }
+                if (claims.secureBoot === false) {
+                    errors.push(`GPU ${name} reports secure boot disabled`);
+                }
+                if (claims.measurementResult !== null && claims.measurementResult !== 'success') {
+                    errors.push(`GPU ${name} measurements did not match NVIDIA's reference values ` +
+                        `(measres=${claims.measurementResult})`);
+                }
+                if (claims.reportNonceMatch === false) {
+                    errors.push(`GPU ${name} attestation report did not echo the submitted nonce`);
+                }
+            }
+            if (Object.keys(gpu.gpus).length === 0) {
+                errors.push('NVIDIA returned no per-GPU claims to check');
+            }
+            gpuVerified = errors.length === errorsBeforeGpu;
+        }
+        catch (e) {
+            errors.push(`GPU attestation failed: ${e.message}`);
+        }
+    }
+    if (requireGpu && !gpuVerified) {
+        if (!gpuVerifier) {
+            errors.push('GPU attestation is required but no gpuVerifier was provided');
+        }
+        else if (!response.nvidia_payload) {
+            errors.push('GPU attestation is required but the response carried no GPU evidence');
+        }
+        else {
+            errors.push('GPU attestation did not complete successfully');
         }
     }
     if (requireDcap && !dcapVerified) {

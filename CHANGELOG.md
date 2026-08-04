@@ -2,6 +2,15 @@
 
 This changelog summarizes user-visible changes to `venice-e2ee`. It also calls out the privacy and verification limits that matter when deciding whether to use a release.
 
+## Unreleased
+
+### GPU attestation policy
+
+- Added `createNvidiaVerifier()` (exported from `venice-e2ee/nvidia`) and the `gpuVerifier` / `requireGpu` options. When the attestation response carries an `nvidia_payload`, the evidence is submitted verbatim to NVIDIA's Remote Attestation Service and checked against NVIDIA's root of trust instead of the provider's own claim about it.
+- The policy requires NVIDIA's `eat_nonce` to equal the nonce the session sent, so a passing verdict describes this request rather than a replayed report. It also requires `secboot`, `dbgstat: "disabled"` and `measres: "success"` on every GPU named, and `requireGpu` fails closed when no evidence is served at all.
+- Results are reported in `session.attestation.gpu` / `.gpuVerified`, with the signed tokens carried through as `gpu.rawTokens`.
+- Limits, stated in the README rather than implied: the verdict is NVIDIA's and is authenticated by TLS rather than by checking the ES384 signature, and nothing binds the GPU evidence to the TDX quote beyond the shared nonce — for Venice's E2EE models the attested CVM reports `num_gpus: 0`, so the two are not the same machine.
+
 ## 0.3.0 — 2026-08-03
 
 ### Function calling over E2EE
