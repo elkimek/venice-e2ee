@@ -652,9 +652,25 @@ function parseArgKeyValueBody(
   ];
 }
 
-/** Strip `<arg_key>`/`<arg_value>` tags, leaving the text they wrapped. */
-function stripArgTags(text: string): string {
-  return text.replace(/<\/?arg_(?:key|value)>/g, '');
+/**
+ * Remove arg tags only where they act as separators: at the start or end of a
+ * line.
+ *
+ * Removing them everywhere would edit argument values. Searching for the literal
+ * text `</arg_value>` is a legitimate `grep`, and deleting it from the pattern
+ * yields a call that runs and quietly returns the wrong thing — the exact
+ * failure this parser refuses to trade recovery for. In the output this repairs,
+ * the orphaned tags always sit against a line boundary.
+ */
+function stripArgTagsAtLineEdges(text: string): string {
+  return text
+    .split('\n')
+    .map((line) =>
+      line
+        .replace(/^(?:\s*<\/?arg_(?:key|value)>)+/, '')
+        .replace(/(?:<\/?arg_(?:key|value)>\s*)+$/, '')
+    )
+    .join('\n');
 }
 
 /**
@@ -723,7 +739,7 @@ function parseNameThenJsonBody(
 ): ToolCall[] {
   if (!lookup || lookup.size === 0) return [];
 
-  const body = stripArgTags(text).trim();
+  const body = text.trim();
   // Longest first, so `read` cannot claim a body that belongs to `read_file`.
   const name = [...lookup.keys()]
     .sort((a, b) => b.length - a.length)
@@ -780,7 +796,7 @@ function parseLineDelimitedBody(
   // A half-dropped `</arg_value>` or `<arg_key>` is common in this form, and
   // left in place it becomes a line of its own — which breaks the key/value
   // pairing below and silently costs the caller the whole call.
-  const lines = stripArgTags(text)
+  const lines = stripArgTagsAtLineEdges(text)
     .split('\n')
     .map((line) => line.trim())
     .filter(Boolean);

@@ -541,6 +541,43 @@ describe("GLM's native arg_key/arg_value body", () => {
 
 
 
+    it('leaves tag-shaped text inside a value alone', () => {
+      // Searching for the literal text of a transport tag is a legitimate grep.
+      // Stripping it from the pattern would produce a call that runs and returns
+      // the wrong thing, which is worse than not recovering the call.
+      const { toolCalls } = parseToolCalls(
+        '<tool_call>grep\npattern\nfoo</arg_value>bar\n</arg_value></tool_call>',
+        { tools: [grepTool] }
+      );
+      expect(toolCalls).toHaveLength(1);
+      expect(JSON.parse(toolCalls[0].function.arguments)).toEqual({
+        pattern: 'foo</arg_value>bar',
+      });
+    });
+
+    it('keeps tag-shaped text in a call-syntax argument', () => {
+      const editTool: ToolDefinition = {
+        type: 'function',
+        function: {
+          name: 'edit',
+          parameters: {
+            type: 'object',
+            properties: { filePath: { type: 'string' }, oldString: { type: 'string' } },
+            required: ['filePath', 'oldString'],
+          },
+        },
+      };
+      const { toolCalls } = parseToolCalls(
+        '<tool_call>edit(filePath:"/src/a.ts",oldString:"const x = \\"<arg_value>\\";")',
+        { tools: [editTool] }
+      );
+      expect(toolCalls).toHaveLength(1);
+      expect(JSON.parse(toolCalls[0].function.arguments)).toEqual({
+        filePath: '/src/a.ts',
+        oldString: 'const x = "<arg_value>";',
+      });
+    });
+
     it('parses call syntax with bare keys and keeps the escapes intact', () => {
       const editTool: ToolDefinition = {
         type: 'function',
