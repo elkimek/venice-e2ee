@@ -248,6 +248,7 @@ export {
   receiptSigningBytes,
   jcsStringify,
   sha256Prefixed,
+  BODY_BINDING_CHECKS,
   hashReceiptBody,
   computeWorkloadId,
   computeWorkloadKeysetDigest,

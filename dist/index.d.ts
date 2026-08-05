@@ -20,7 +20,7 @@ export declare function isE2EEModel(modelId: string): boolean;
 export type { VeniceE2EEOptions, E2EESession, EncryptedPayload, DcapVerifier, DcapVerifyResult, ExpectedTdxMeasurements, TdxMeasurements, } from './types.js';
 export type { AttestationResponse, AttestationResult, AttestationVerificationOptions, ServerVerification, } from './attestation.js';
 export { verifyAttestation, deriveEthAddress } from './attestation.js';
-export { verifyReceipt, receiptSigningBytes, jcsStringify, sha256Prefixed, hashReceiptBody, computeWorkloadId, computeWorkloadKeysetDigest, } from './receipt.js';
+export { verifyReceipt, receiptSigningBytes, jcsStringify, sha256Prefixed, BODY_BINDING_CHECKS, hashReceiptBody, computeWorkloadId, computeWorkloadKeysetDigest, } from './receipt.js';
 export type { Receipt, ReceiptEvent, ReceiptCheck, ReceiptVerification, SignatureResponse, WorkloadKeyset, WorkloadIdentity, WorkloadPublicKey, KeysetKey, ReceiptTrustAnchor, ReceiptBody, ReceiptResponseHashField, VerifyReceiptOptions, } from './receipt.js';
 export { generateKeypair, deriveAESKey, encryptMessage, decryptChunk, toHex, fromHex, } from './crypto.js';
 export { decryptSSEStream } from './stream.js';

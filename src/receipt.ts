@@ -13,6 +13,15 @@
  * self-described values from that response into a trust root. The caller must
  * supply a trust anchor established from canonical ACI attestation verification
  * or an independently pinned workload identity and keyset digest.
+ *
+ * Binding (3) is currently unreachable for a client of `api.venice.ai`. Measured on the
+ * E2EE and TEE-only paths, streaming and not, with the exact bytes sent and
+ * received: both body hashes fail in all four combinations, which places a
+ * re-serializing hop between the caller and the enclave that issues the receipt.
+ * The requirement stays — `verified` is false without it, and this module does
+ * not get to decide the binding is optional — but callers behind such a gateway
+ * should distinguish that from a receipt that failed for any other reason. See
+ * {@link BODY_BINDING_CHECKS}.
  */
 
 import { sha256 } from '@noble/hashes/sha2.js';
@@ -98,6 +107,19 @@ export interface ReceiptTrustAnchor {
   workloadId: string;
   workloadKeysetDigest: string;
 }
+
+/**
+ * The check names that bind a receipt to specific request and response bytes.
+ *
+ * Exported so a caller can tell "this binding is not reachable from here" apart
+ * from "this receipt is wrong" without matching on string literals. A caller
+ * behind a re-serializing gateway will see exactly these two fail on every
+ * completion; anything else failing alongside them is a real problem.
+ */
+export const BODY_BINDING_CHECKS: readonly string[] = [
+  'request_body_hash_matches',
+  'response_body_hash_matches',
+];
 
 export type ReceiptBody = string | Uint8Array;
 export type ReceiptResponseHashField = 'wire_hash' | 'cleartext_hash';
