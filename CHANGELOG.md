@@ -2,6 +2,14 @@
 
 This changelog summarizes user-visible changes to `venice-e2ee`. It also calls out the privacy and verification limits that matter when deciding whether to use a release.
 
+## 0.4.1 — 2026-08-05
+
+### Receipt body-binding diagnostics
+
+- Added `BODY_BINDING_CHECKS`, naming the request and response body-hash checks so callers can distinguish an unreachable public-gateway binding from any other receipt-verification failure without duplicating string literals.
+- Documented that `api.venice.ai` currently re-serializes request and response bodies before the enclave sees them, making those two checks unreproducible from the public client vantage point.
+- Receipt verification remains fail closed: `verified` is still false when either body binding is missing, and the caller remains responsible for deciding how to report that known gateway limitation.
+
 ## 0.4.0 — 2026-08-05
 
 ### GPU attestation policy
@@ -18,6 +26,12 @@ This changelog summarizes user-visible changes to `venice-e2ee`. It also calls o
 - The key set is cached for 12 hours and refetched on an unknown `kid`, rate-limited so malformed tokens or a failing NVIDIA cannot become a request flood. TTL refresh notices withdrawn keys; NVIDIA's roughly 48-hour signing-leaf validity window is enforced as an additional bound whenever the key carries an `x5c` chain.
 - `pinnedLeafCertSha256` accepts only exact leaf-certificate fingerprints obtained out of band. It cannot be satisfied by appending an unrelated pinned root or intermediate to an unvalidated `x5c` array. `chainSha256` reports the observed chain digests.
 - `GpuVerifyResult.tokensVerified` reports whether signatures were checked.
+
+### Tool-call parser resilience
+
+- Repaired malformed JSON, parenthesized calls, and stray argument tags observed in GLM tool-call output, while preserving escapes and multi-line string content.
+- Fixed separator ordering in the tagged argument parser so spaces inside values cannot be mistaken for key boundaries.
+- Kept ambiguous repairs fail closed rather than silently producing corrupted tool arguments, with captured-output and streaming regression coverage.
 
 ## 0.3.0 — 2026-08-03
 

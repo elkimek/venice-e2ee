@@ -247,9 +247,9 @@ the receipt's `cleartext_hash`. Select `wire_hash` only for the exact wire repre
 `cleartext_hash` only when the gateway's pre-encryption serialization is available; never
 substitute the hash copied from the receipt itself.
 
-### Body binding is unreachable behind `api.venice.ai`
+### Body binding is currently unreachable behind `api.venice.ai`
 
-Measured against the live API rather than inferred: a client of Venice's public API cannot
+Measured against the live API rather than inferred: a client of Venice's public API currently cannot
 satisfy `request_body_hash_matches` or `response_body_hash_matches` with any byte
 representation it can obtain.
 

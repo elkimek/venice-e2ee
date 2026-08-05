@@ -14,7 +14,7 @@
  * supply a trust anchor established from canonical ACI attestation verification
  * or an independently pinned workload identity and keyset digest.
  *
- * Binding (3) is unreachable for a client of `api.venice.ai`. Measured on the
+ * Binding (3) is currently unreachable for a client of `api.venice.ai`. Measured on the
  * E2EE and TEE-only paths, streaming and not, with the exact bytes sent and
  * received: both body hashes fail in all four combinations, which places a
  * re-serializing hop between the caller and the enclave that issues the receipt.
