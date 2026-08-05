@@ -2,6 +2,23 @@
 
 This changelog summarizes user-visible changes to `venice-e2ee`. It also calls out the privacy and verification limits that matter when deciding whether to use a release.
 
+## 0.4.0 — 2026-08-05
+
+### GPU attestation policy
+
+- Added `createNvidiaVerifier()` (exported from `venice-e2ee/nvidia`) and the `gpuVerifier` / `requireGpu` options. When the attestation response carries an `nvidia_payload`, the evidence is submitted verbatim to NVIDIA's Remote Attestation Service and checked against NVIDIA's root of trust instead of the provider's own claim about it.
+- The policy requires `eat_nonce` in the overall and every per-GPU token to equal the nonce the session sent, so a passing verdict describes this request rather than a replayed report. It also requires positive `secboot`, `dbgstat: "disabled"`, `measres: "success"`, and report-nonce-match claims on every GPU named. Missing or mistyped claims fail closed, and `requireGpu` also fails when no evidence is served at all.
+- Results are reported in `session.attestation.gpu` / `.gpuVerified`, with the signed tokens carried through as `gpu.rawTokens`.
+- Limits, stated in the README rather than implied: the verdict is NVIDIA's, and nothing binds the GPU evidence to the TDX quote beyond the shared nonce — for Venice's E2EE models the attested CVM reports `num_gpus: 0`, so the two are not the same machine.
+
+### NVIDIA token signature verification
+
+- Added `createNrasTokenVerifier()` (exported from `venice-e2ee/nvidia`) and the `tokenVerifier` option on `createNvidiaVerifier()`. Tokens are checked with ES384 against NVIDIA's published key set instead of resting on TLS to NRAS, so a token stays checkable when relayed, cached, or logged.
+- The algorithm is pinned to ES384 rather than read from the token, closing the algorithm-confusion family including `alg: none`. `iss` and a finite `exp` are required, optional `nbf` is checked when present, and every token is verified — overall and per-GPU — with any failure rejecting the whole result.
+- The key set is cached for 12 hours and refetched on an unknown `kid`, rate-limited so malformed tokens or a failing NVIDIA cannot become a request flood. TTL refresh notices withdrawn keys; NVIDIA's roughly 48-hour signing-leaf validity window is enforced as an additional bound whenever the key carries an `x5c` chain.
+- `pinnedLeafCertSha256` accepts only exact leaf-certificate fingerprints obtained out of band. It cannot be satisfied by appending an unrelated pinned root or intermediate to an unvalidated `x5c` array. `chainSha256` reports the observed chain digests.
+- `GpuVerifyResult.tokensVerified` reports whether signatures were checked.
+
 ## 0.3.0 — 2026-08-03
 
 ### Function calling over E2EE

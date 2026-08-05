@@ -1,6 +1,6 @@
 {
   "name": "venice-e2ee",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Client-side message encryption and attestation evidence for Venice AI E2EE models",
   "type": "module",
   "main": "dist/index.js",
@@ -13,6 +13,10 @@
     "./dcap": {
       "import": "./dist/dcap.js",
       "types": "./dist/dcap.d.ts"
+    },
+    "./nvidia": {
+      "import": "./dist/nvidia.js",
+      "types": "./dist/nvidia.d.ts"
     }
   },
   "files": [
@@ -20,7 +24,6 @@
     "CHANGELOG.md"
   ],
   "scripts": {
-    
     "build": "tsc",
     "build:browser": "esbuild src/index.ts --bundle --format=esm --outfile=dist/venice-e2ee.browser.js --target=es2022 --banner:js=\"// @ts-nocheck\"",
     "test": "vitest run",

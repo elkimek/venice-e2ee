@@ -29,10 +29,12 @@ export function createVeniceE2EE(options: VeniceE2EEOptions) {
     verifyAttestation: shouldVerify = true,
     dcapVerifier,
     requireDcap = false,
+    gpuVerifier,
+    requireGpu = false,
     expectedMeasurements,
     allowPlaintextResponses = false,
   } = options;
-  if (!shouldVerify && (requireDcap || expectedMeasurements)) {
+  if (!shouldVerify && (requireDcap || requireGpu || expectedMeasurements)) {
     throw new Error('Attestation policy cannot be required when verifyAttestation is false');
   }
   let _session: E2EESession | null = null;
@@ -87,6 +89,8 @@ export function createVeniceE2EE(options: VeniceE2EEOptions) {
       attestation = await verifyAttestation(response, nonceBytes, {
         dcapVerifier,
         requireDcap,
+        gpuVerifier,
+        requireGpu,
         expectedMeasurements,
         expectedModelId: modelId,
       });

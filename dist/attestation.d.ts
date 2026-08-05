@@ -1,4 +1,4 @@
-import type { DcapVerifier, DcapVerifyResult, ExpectedTdxMeasurements, TdxMeasurements } from './types.js';
+import type { DcapVerifier, DcapVerifyResult, ExpectedTdxMeasurements, GpuVerifier, GpuVerifyResult, TdxMeasurements } from './types.js';
 import type { WorkloadKeyset } from './receipt.js';
 export interface AttestationResponse {
     api_version?: string;
@@ -60,6 +60,13 @@ export interface AttestationResult {
     dcap?: DcapVerifyResult;
     /** Whether an injected DCAP verifier completed without a rejected TCB status. */
     dcapVerified: boolean;
+    /** GPU attestation result (present when gpuVerifier ran against GPU evidence) */
+    gpu?: GpuVerifyResult;
+    /**
+     * Whether NVIDIA vouched for the GPU evidence *and* its `eat_nonce` matched
+     * the nonce sent. False when no verifier ran, or no evidence was served.
+     */
+    gpuVerified: boolean;
     /** Measurements parsed from the TDX quote. Reporting them is not validation. */
     measurements?: TdxMeasurements;
     /** Result of the caller-supplied measurement allowlist, or null if none was supplied. */
@@ -72,6 +79,8 @@ export interface AttestationResult {
 export interface AttestationVerificationOptions {
     dcapVerifier?: DcapVerifier;
     requireDcap?: boolean;
+    gpuVerifier?: GpuVerifier;
+    requireGpu?: boolean;
     expectedMeasurements?: ExpectedTdxMeasurements;
     expectedModelId?: string;
 }
