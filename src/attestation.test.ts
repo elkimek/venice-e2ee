@@ -6,6 +6,7 @@ import {
   type AttestationResponse,
 } from './attestation.js';
 import { toHex, fromHex } from './crypto.js';
+import type { GpuVerifyResult } from './types.js';
 
 // ── Helpers to build mock TDX quotes ──────────────────────────────────
 
@@ -242,6 +243,181 @@ describe('verifyAttestation', () => {
     response.server_verification!.nvidia = { valid: false, error: 'GPU evidence invalid' };
     const result = await verifyAttestation(response, clientNonce);
     expect(result.errors).toContainEqual(expect.stringContaining('NVIDIA attestation'));
+  });
+
+  // ── GPU attestation policy ──────────────────────────────────────────
+  //
+  // The verifier is stubbed here on purpose: these tests are about what the
+  // policy does with NVIDIA's answer, not about reaching NVIDIA.
+
+  const GPU_PAYLOAD = JSON.stringify({ arch: 'HOPPER', evidence_list: [] });
+
+  function gpuResult(overrides: Partial<GpuVerifyResult> = {}): GpuVerifyResult {
+    return {
+      overallResult: true,
+      eatNonce: toHex(clientNonce),
+      arch: 'HOPPER',
+      gpus: {
+        'GPU-0': {
+          hwModel: 'GH100',
+          secureBoot: true,
+          debugStatus: 'disabled',
+          measurementResult: 'success',
+          reportNonceMatch: true,
+          eatNonce: toHex(clientNonce),
+        },
+      },
+      tokensVerified: false,
+      rawTokens: { overall: 'a.b.c', perGpu: { 'GPU-0': 'a.b.c' } },
+      ...overrides,
+    };
+  }
+
+  const gpuVerifier = (result = gpuResult()) => async () => result;
+
+  it('accepts GPU evidence NVIDIA vouches for with a matching nonce', async () => {
+    const result = await verifyAttestation(
+      makeResponse({ nvidia_payload: GPU_PAYLOAD }),
+      clientNonce,
+      { gpuVerifier: gpuVerifier() }
+    );
+    expect(result.errors).toEqual([]);
+    expect(result.gpuVerified).toBe(true);
+    expect(result.gpu?.arch).toBe('HOPPER');
+  });
+
+  it('rejects GPU evidence whose eat_nonce belongs to another request', async () => {
+    const result = await verifyAttestation(
+      makeResponse({ nvidia_payload: GPU_PAYLOAD }),
+      clientNonce,
+      { gpuVerifier: gpuVerifier(gpuResult({ eatNonce: 'b'.repeat(64) })) }
+    );
+    expect(result.errors).toContainEqual(expect.stringContaining('eat_nonce does not match'));
+    expect(result.gpuVerified).toBe(false);
+  });
+
+  it('rejects GPU evidence with no eat_nonce at all', async () => {
+    const result = await verifyAttestation(
+      makeResponse({ nvidia_payload: GPU_PAYLOAD }),
+      clientNonce,
+      { gpuVerifier: gpuVerifier(gpuResult({ eatNonce: null })) }
+    );
+    expect(result.errors).toContainEqual(expect.stringContaining('no eat_nonce'));
+  });
+
+  it('rejects a negative overall verdict from NVIDIA', async () => {
+    const result = await verifyAttestation(
+      makeResponse({ nvidia_payload: GPU_PAYLOAD }),
+      clientNonce,
+      { gpuVerifier: gpuVerifier(gpuResult({ overallResult: false })) }
+    );
+    expect(result.errors).toContainEqual(expect.stringContaining('did not vouch'));
+  });
+
+  it('rejects a GPU in debug mode', async () => {
+    const bad = gpuResult();
+    bad.gpus['GPU-0'].debugStatus = 'enabled';
+    const result = await verifyAttestation(
+      makeResponse({ nvidia_payload: GPU_PAYLOAD }),
+      clientNonce,
+      { gpuVerifier: gpuVerifier(bad) }
+    );
+    expect(result.errors).toContainEqual(expect.stringContaining('debug mode disabled'));
+  });
+
+  it('rejects a GPU with secure boot off or failed measurements', async () => {
+    const bad = gpuResult();
+    bad.gpus['GPU-0'].secureBoot = false;
+    bad.gpus['GPU-0'].measurementResult = 'failure';
+    const result = await verifyAttestation(
+      makeResponse({ nvidia_payload: GPU_PAYLOAD }),
+      clientNonce,
+      { gpuVerifier: gpuVerifier(bad) }
+    );
+    expect(result.errors).toContainEqual(expect.stringContaining('secure boot enabled'));
+    expect(result.errors).toContainEqual(expect.stringContaining('reference values'));
+  });
+
+  it('fails closed when required per-GPU security claims are missing', async () => {
+    const bad = gpuResult();
+    bad.gpus['GPU-0'].secureBoot = null;
+    bad.gpus['GPU-0'].debugStatus = null;
+    bad.gpus['GPU-0'].measurementResult = null;
+    bad.gpus['GPU-0'].reportNonceMatch = null;
+    bad.gpus['GPU-0'].eatNonce = null;
+
+    const result = await verifyAttestation(
+      makeResponse({ nvidia_payload: GPU_PAYLOAD }),
+      clientNonce,
+      { gpuVerifier: gpuVerifier(bad) }
+    );
+
+    expect(result.gpuVerified).toBe(false);
+    expect(result.errors).toContainEqual(expect.stringContaining('secboot=missing'));
+    expect(result.errors).toContainEqual(expect.stringContaining('dbgstat=missing'));
+    expect(result.errors).toContainEqual(expect.stringContaining('measres=missing'));
+    expect(result.errors).toContainEqual(expect.stringContaining('nonce-match=missing'));
+    expect(result.errors).toContainEqual(expect.stringContaining('GPU GPU-0 token carries no eat_nonce'));
+  });
+
+  it('rejects a per-GPU token whose eat_nonce belongs to another request', async () => {
+    const bad = gpuResult();
+    bad.gpus['GPU-0'].eatNonce = 'b'.repeat(64);
+
+    const result = await verifyAttestation(
+      makeResponse({ nvidia_payload: GPU_PAYLOAD }),
+      clientNonce,
+      { gpuVerifier: gpuVerifier(bad) }
+    );
+
+    expect(result.gpuVerified).toBe(false);
+    expect(result.errors).toContainEqual(
+      expect.stringContaining('GPU GPU-0 token eat_nonce does not match')
+    );
+  });
+
+  it('rejects a verdict that names no GPUs', async () => {
+    const result = await verifyAttestation(
+      makeResponse({ nvidia_payload: GPU_PAYLOAD }),
+      clientNonce,
+      { gpuVerifier: gpuVerifier(gpuResult({ gpus: {} })) }
+    );
+    expect(result.errors).toContainEqual(expect.stringContaining('no per-GPU claims'));
+  });
+
+  it('surfaces a verifier that throws instead of swallowing it', async () => {
+    const result = await verifyAttestation(
+      makeResponse({ nvidia_payload: GPU_PAYLOAD }),
+      clientNonce,
+      { gpuVerifier: async () => { throw new Error('NRAS unreachable'); } }
+    );
+    expect(result.errors).toContainEqual(expect.stringContaining('NRAS unreachable'));
+    expect(result.gpuVerified).toBe(false);
+  });
+
+  it('ignores GPU policy when no evidence is served and requireGpu is off', async () => {
+    const result = await verifyAttestation(makeResponse(), clientNonce, {
+      gpuVerifier: gpuVerifier(),
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.gpuVerified).toBe(false);
+  });
+
+  it('requireGpu fails closed when the response carries no GPU evidence', async () => {
+    const result = await verifyAttestation(makeResponse(), clientNonce, {
+      gpuVerifier: gpuVerifier(),
+      requireGpu: true,
+    });
+    expect(result.errors).toContainEqual(expect.stringContaining('carried no GPU evidence'));
+  });
+
+  it('requireGpu fails closed when no verifier was supplied', async () => {
+    const result = await verifyAttestation(
+      makeResponse({ nvidia_payload: GPU_PAYLOAD }),
+      clientNonce,
+      { requireGpu: true }
+    );
+    expect(result.errors).toContainEqual(expect.stringContaining('no gpuVerifier was provided'));
   });
 
   it('detects client/server binding inconsistency', async () => {

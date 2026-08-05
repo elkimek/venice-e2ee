@@ -11,6 +11,53 @@ export interface DcapVerifyResult {
  * Use `createDcapVerifier()` from `venice-e2ee/dcap` for the default implementation.
  */
 export type DcapVerifier = (quoteBytes: Uint8Array) => Promise<DcapVerifyResult>;
+/**
+ * Claims NVIDIA asserts about one GPU in an attested node.
+ * Missing or mistyped claims are represented as null and fail the default GPU
+ * policy rather than being treated as a secure state.
+ */
+export interface NvidiaGpuClaims {
+    /** Hardware model, e.g. "GH100 A01 GSP BROM". */
+    hwModel: string | null;
+    /** Secure boot enabled on the GPU. */
+    secureBoot: boolean | null;
+    /** "disabled" when the GPU is not in debug mode. */
+    debugStatus: string | null;
+    /** "success" when measurements matched NVIDIA's reference values. */
+    measurementResult: string | null;
+    /** NVIDIA's own check that the report echoes the submitted nonce. */
+    reportNonceMatch: boolean | null;
+    eatNonce: string | null;
+}
+/** What NVIDIA's Remote Attestation Service asserts about the GPU evidence. */
+export interface GpuVerifyResult {
+    /** NVIDIA's overall verdict (`x-nvidia-overall-att-result`). */
+    overallResult: boolean;
+    /** Nonce echoed in the signed token. Must be compared against the one sent. */
+    eatNonce: string | null;
+    /** GPU architecture named in the evidence, e.g. "HOPPER". Reporting only. */
+    arch: string | null;
+    /** Per-GPU claims, keyed as NVIDIA labels them ("GPU-0", ...). */
+    gpus: Record<string, NvidiaGpuClaims>;
+    /**
+     * Whether every token's ES384 signature was checked against NVIDIA's
+     * published keys. False means the claims rest on TLS to NRAS alone, which
+     * says nothing about a token that arrived by any other route.
+     */
+    tokensVerified: boolean;
+    /** Signed tokens as received, for callers who verify them against NVIDIA's JWKS. */
+    rawTokens: {
+        overall: string;
+        perGpu: Record<string, string>;
+    };
+}
+/**
+ * Function that verifies NVIDIA GPU evidence, given the raw `nvidia_payload`
+ * string from the attestation response.
+ * Use `createNvidiaVerifier()` from `venice-e2ee/nvidia` for the default
+ * implementation, which submits it to NVIDIA's Remote Attestation Service.
+ */
+export type GpuVerifier = (nvidiaPayload: string) => Promise<GpuVerifyResult>;
 /** TDX measurements extracted from the quote body. */
 export interface TdxMeasurements {
     mrSeam: string;
@@ -50,6 +97,27 @@ export interface VeniceE2EEOptions {
     dcapVerifier?: DcapVerifier;
     /** Fail session creation unless full DCAP verification ran. Default: false. */
     requireDcap?: boolean;
+    /**
+     * Optional GPU verifier for the `nvidia_payload` carried alongside the TDX
+     * quote. When provided, the evidence is checked against NVIDIA's root of
+     * trust and its `eat_nonce` is required to match the nonce this session sent
+     * — so the result describes this request rather than a replayed one.
+     *
+     * This says nothing about co-location: the GPU evidence and the TDX quote
+     * share only a nonce, not a proof that they came from the same machine.
+     *
+     * ```ts
+     * import { createNvidiaVerifier } from 'venice-e2ee/nvidia';
+     * const e2ee = createVeniceE2EE({ apiKey, gpuVerifier: createNvidiaVerifier() });
+     * ```
+     */
+    gpuVerifier?: GpuVerifier;
+    /**
+     * Fail session creation unless GPU attestation verified. Default: false.
+     * Also fails when the response carries no GPU evidence at all, which is the
+     * point — otherwise a provider can silently drop the payload to skip the check.
+     */
+    requireGpu?: boolean;
     /** Optional measurement allowlist. Requires successful DCAP verification. */
     expectedMeasurements?: ExpectedTdxMeasurements;
     /**

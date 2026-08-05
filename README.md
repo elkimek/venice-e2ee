@@ -134,7 +134,49 @@ const e2ee = createVeniceE2EE({
 });
 ```
 
-The provided adapter uses Phala PCCS by default. It validates Intel DCAP quote signatures, certificate/TCB collateral, and revocation information. This is stronger than the default binding checks, but it still does not validate NVIDIA GPU evidence or establish that the measured software is approved.
+The provided adapter uses Phala PCCS by default. It validates Intel DCAP quote signatures, certificate/TCB collateral, and revocation information. This is stronger than the default binding checks, but it does not establish that the measured software is approved, and it says nothing about the GPU.
+
+### GPU attestation policy
+
+When the attestation response carries an `nvidia_payload`, that GPU evidence can be checked against NVIDIA's root of trust rather than taken on the provider's word:
+
+```js
+import { createNvidiaVerifier } from 'venice-e2ee/nvidia';
+
+const e2ee = createVeniceE2EE({
+  apiKey: 'your-venice-api-key',
+  gpuVerifier: createNvidiaVerifier(),
+  requireGpu: true,
+});
+```
+
+The verifier submits the payload verbatim to NVIDIA's Remote Attestation Service, which validates the GPU's report against the endorsement chain rooted in a key burned into the die and against NVIDIA's reference measurements for the running VBIOS and driver. The policy then requires `eat_nonce` in the overall and every per-GPU token to equal the nonce this session sent, plus positive `secboot`, `dbgstat: "disabled"`, `measres: "success"`, and report-nonce-match claims on every GPU named. Missing or mistyped security claims fail closed. `requireGpu: true` also fails when no GPU evidence is served at all, so a provider cannot skip the check by omitting the payload.
+
+#### Token signature verification
+
+By default the verdict is authenticated by TLS to `nras.attestation.nvidia.com` — sound for a call you make yourself, worth nothing for a token that reached you any other way. `createNrasTokenVerifier()` checks the ES384 signature instead, against keys fetched from NVIDIA's published key set:
+
+```js
+import { createNvidiaVerifier, createNrasTokenVerifier } from 'venice-e2ee/nvidia';
+
+const gpuVerifier = createNvidiaVerifier({
+  tokenVerifier: createNrasTokenVerifier(),
+});
+```
+
+Every token is checked, overall and per-GPU, and any failure rejects the whole result — there is no path where an unverified token's claims get used. `gpu.tokensVerified` reports whether this ran. Alongside the signature it pins the algorithm to ES384 (so a token cannot negotiate itself down to `none`), requires the expected `iss` and a finite `exp`, and validates `nbf` when present.
+
+The key set is cached for 12 hours and refetched whenever a token names a `kid` not held, rate-limited so a malformed token cannot turn into a request flood. The TTL is the maximum time a still-cached withdrawn key remains trusted. When NVIDIA publishes an `x5c` chain, the signing leaf's own roughly 48-hour validity window is enforced as an additional bound.
+
+What this buys beyond the TLS default: the token stands on its own. It can be relayed by the provider, cached, logged, or handed to someone else, and still be checkable — which is the groundwork for verifying GPU evidence without a round trip to NVIDIA per session.
+
+`pinnedLeafCertSha256` takes SHA-256 digests of exact NVIDIA signing leaf certificates obtained out of band. When configured, the first `x5c` certificate must match one of those fingerprints and carry the JWK's public key, so an unrelated root or intermediate appended to an unvalidated array cannot satisfy the pin. NVIDIA rotates these short-lived leaves, so operators must provision overlapping current fingerprints. `VerifiedNrasToken.chainSha256` reports the observed chain digests. Root and intermediate pinning are deliberately unsupported because that would require full RFC 5280 path validation.
+
+#### Limits
+
+- **The verdict is NVIDIA's, not yours.** Signature verification proves NVIDIA said it; it does not independently evaluate the GPU evidence.
+- **It does not prove co-location.** Nothing binds the GPU evidence to the TDX quote in the same response beyond the shared nonce. That shows both were produced for one request, not that they came from one machine — and for Venice's E2EE models the attested CVM reports `num_gpus: 0`, so they demonstrably are not.
+- **It costs a round trip** to NVIDIA per session, and discloses to NVIDIA that the evidence was checked.
 
 ### Measurement policy
 
@@ -402,7 +444,7 @@ stays ciphertext.
 
 **Not verified client-side by default:**
 - TDX quote signature chain (available via optional DCAP verifier)
-- NVIDIA GPU attestation
+- NVIDIA GPU attestation (available via optional GPU verifier; NVIDIA's verdict, not an independent quote check, and not bound to the TDX quote)
 - TEE code measurements
 - Response receipts unless the caller supplies an independently established workload/keyset trust anchor and exact request/response bytes
 

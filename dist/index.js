@@ -5,8 +5,8 @@ import { verifyAttestation, } from './attestation.js';
 const DEFAULT_BASE_URL = 'https://api.venice.ai';
 const DEFAULT_SESSION_TTL = 30 * 60 * 1000; // 30 minutes
 export function createVeniceE2EE(options) {
-    const { apiKey, baseUrl = DEFAULT_BASE_URL, sessionTTL = DEFAULT_SESSION_TTL, verifyAttestation: shouldVerify = true, dcapVerifier, requireDcap = false, expectedMeasurements, allowPlaintextResponses = false, } = options;
-    if (!shouldVerify && (requireDcap || expectedMeasurements)) {
+    const { apiKey, baseUrl = DEFAULT_BASE_URL, sessionTTL = DEFAULT_SESSION_TTL, verifyAttestation: shouldVerify = true, dcapVerifier, requireDcap = false, gpuVerifier, requireGpu = false, expectedMeasurements, allowPlaintextResponses = false, } = options;
+    if (!shouldVerify && (requireDcap || requireGpu || expectedMeasurements)) {
         throw new Error('Attestation policy cannot be required when verifyAttestation is false');
     }
     let _session = null;
@@ -53,6 +53,8 @@ export function createVeniceE2EE(options) {
             attestation = await verifyAttestation(response, nonceBytes, {
                 dcapVerifier,
                 requireDcap,
+                gpuVerifier,
+                requireGpu,
                 expectedMeasurements,
                 expectedModelId: modelId,
             });

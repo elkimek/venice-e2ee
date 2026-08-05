@@ -368,19 +368,80 @@ function firstJsonValue(text: string): string | null {
   return null;
 }
 
+/**
+ * Escape control characters that appear raw inside JSON string literals.
+ *
+ * Models routinely put real newlines in a string value instead of `\n` — a file
+ * edit passing `oldString`/`newString` is multi-line by nature, so this is the
+ * normal case rather than a rare slip. JSON forbids unescaped control characters
+ * in strings, so `JSON.parse` rejects the payload and an otherwise perfectly
+ * formed tool call is lost with it.
+ *
+ * Only characters inside strings are touched; the newlines that separate the
+ * JSON structure itself are already legal and are left alone.
+ */
+function escapeJsonControlChars(text: string): string {
+  const named: Record<string, string> = {
+    '\n': '\\n',
+    '\r': '\\r',
+    '\t': '\\t',
+    '\b': '\\b',
+    '\f': '\\f',
+  };
+
+  let out = '';
+  let inString = false;
+  let escaped = false;
+
+  for (const ch of text) {
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+        out += ch;
+      } else if (ch === '\\') {
+        escaped = true;
+        out += ch;
+      } else if (ch === '"') {
+        inString = false;
+        out += ch;
+      } else if (named[ch]) {
+        out += named[ch];
+      } else if (ch < ' ') {
+        out += `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`;
+      } else {
+        out += ch;
+      }
+      continue;
+    }
+    if (ch === '"') inString = true;
+    out += ch;
+  }
+
+  return out;
+}
+
 /** Parse `text` as JSON, falling back to the first complete value embedded in it. */
 function parseJsonLoose(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    const candidate = firstJsonValue(text);
-    if (candidate === null) return undefined;
+  const variants = [text];
+  const repaired = escapeJsonControlChars(text);
+  if (repaired !== text) variants.push(repaired);
+
+  for (const variant of variants) {
     try {
-      return JSON.parse(candidate);
+      return JSON.parse(variant);
     } catch {
-      return undefined;
+      const candidate = firstJsonValue(variant);
+      if (candidate !== null) {
+        try {
+          return JSON.parse(candidate);
+        } catch {
+          // Malformed beyond this variant's repair — try the next one.
+        }
+      }
     }
   }
+
+  return undefined;
 }
 
 function firstString(...values: unknown[]): string | undefined {
@@ -486,7 +547,27 @@ function parseArgValue(raw: string): unknown {
 }
 
 const ARG_TAG = /<\/?arg_(?:key|value)>/g;
+const ARG_VALUE_CLOSE = '</arg_value>';
+const ARG_VALUE_OPEN = '<arg_value>';
+const ARG_KEY_OPEN = '<arg_key>';
+/** Any arg tag appearing as literal text where a value is expected. */
+const ANY_ARG_TAG = /<\/?arg_(?:key|value)>/;
 const FUNCTION_NAME = /^[A-Za-z_][\w.-]*$/;
+
+/**
+ * A key that arrived with its value still attached by a separator, as happens
+ * once the model starts emitting the JSON body inside the tags:
+ * `description":"Find …` and `description"]="Find …` are both this shape.
+ * The quote/bracket noise between the key and the separator is the wreckage of
+ * the JSON syntax it was reaching for.
+ */
+const KEY_ASSIGNMENT = /^["'\s]*([A-Za-z_][\w.-]*)["'\]\s]*[:=]\s*/;
+
+function declaredProperties(fn?: ToolFunctionDefinition): Set<string> | null {
+  const properties = fn?.parameters?.properties;
+  if (!properties || typeof properties !== 'object') return null;
+  return new Set(Object.keys(properties));
+}
 
 function parseArgKeyValueBody(
   text: string,
@@ -498,6 +579,8 @@ function parseArgKeyValueBody(
 
   const name = text.slice(0, firstTag.index).trim();
   if (!FUNCTION_NAME.test(name)) return [];
+
+  const declared = declaredProperties(lookup?.get(name));
 
   // Walk (tag, text-after-tag) pairs rather than matching key/value as a unit.
   // The observed output does not keep the tags paired: GLM emits
@@ -512,6 +595,18 @@ function parseArgKeyValueBody(
     const trimmed = segment.trim();
     if (!trimmed) return;
 
+    // A separator means the model started emitting the JSON body inside the tag
+    // — `filePath":"/etc/hosts"`. A real key never contains one, so everything
+    // past it is the value that lost its own tag. This is checked before the
+    // whitespace split below because the value routinely contains spaces of its
+    // own, and splitting on the first of those cuts the key in half.
+    const assigned = KEY_ASSIGNMENT.exec(trimmed);
+    if (assigned) {
+      args[assigned[1]] = parseArgValue(trimmed.slice(assigned[0].length));
+      pendingKey = null;
+      return;
+    }
+
     // A key cannot contain whitespace, so anything after the first gap is the
     // value that lost its own tag.
     const gap = trimmed.search(/\s/);
@@ -519,18 +614,6 @@ function parseArgKeyValueBody(
       args[cleanKey(trimmed.slice(0, gap))] = parseArgValue(trimmed.slice(gap + 1));
       pendingKey = null;
       return;
-    }
-
-    // No gap, but a colon means the model started emitting the JSON body inside
-    // the tag — `filePath":"/etc/hosts"`. A real key never contains one.
-    const colon = trimmed.indexOf(':');
-    if (colon !== -1) {
-      const key = cleanKey(trimmed.slice(0, colon));
-      if (key) {
-        args[key] = parseArgValue(trimmed.slice(colon + 1));
-        pendingKey = null;
-        return;
-      }
     }
 
     pendingKey = cleanKey(trimmed);
@@ -544,8 +627,42 @@ function parseArgKeyValueBody(
 
     if (tag[0] === '<arg_value>') {
       if (pendingKey !== null) {
-        args[pendingKey] = parseArgValue(segment);
+        // This format has no escaping, so tag text appearing inside a value is
+        // indistinguishable from a delimiter. No reading wins both cases: the
+        // first close truncates a value that contains one, the last close
+        // swallows the arguments that follow. Rather than pick a guess, take the
+        // well-formed reading and refuse the whole call when the shape says the
+        // input cannot be read that way.
+        const rest = text.slice(start);
+        const nextKeyAt = rest.indexOf(ARG_KEY_OPEN);
+        const window = nextKeyAt === -1 ? rest : rest.slice(0, nextKeyAt);
+        const closes = window.split(ARG_VALUE_CLOSE).length - 1;
+        const reopens = window.split(ARG_VALUE_OPEN).length - 1;
+
+        // Well-formed is exactly one close, and none for a value the stream cut
+        // short. Anything else is ambiguous.
+        if (reopens > 0 || closes > 1 || (closes === 0 && nextKeyAt !== -1)) return [];
+
+        const close = window.indexOf(ARG_VALUE_CLOSE);
+        args[pendingKey] = parseArgValue(close === -1 ? window : window.slice(0, close));
         pendingKey = null;
+        ARG_TAG.lastIndex = start + (close === -1 ? window.length : close);
+        tag = ARG_TAG.exec(text);
+        continue;
+      } else {
+        // No key is pending, so this value tag has to carry its own key —
+        // `<arg_value>prompt":"Search …`. Dropping it loses a whole argument,
+        // but guessing wrong invents one, so it only counts when the schema
+        // confirms the key is real.
+        const assigned = KEY_ASSIGNMENT.exec(segment.trim());
+        if (!assigned || !declared?.has(assigned[1])) {
+          // Nothing here identifies a real argument; leave it be.
+        } else if (ANY_ARG_TAG.test(segment.slice(assigned[0].length))) {
+          // Tag text inside the value it carries — same ambiguity, same answer.
+          return [];
+        } else {
+          takeKey(segment);
+        }
       }
     } else if (tag[0] === '<arg_key>' || pendingKey === null) {
       // Closing tags should be followed by nothing, but when the opening tag is
@@ -563,6 +680,107 @@ function parseArgKeyValueBody(
       id: generateToolCallId(),
       type: 'function',
       function: { name, arguments: parseArgumentsToJsonString(args, lookup?.get(name)) },
+    },
+  ];
+}
+
+/** A line consisting of nothing but arg tags — a separator, never a value. */
+const ONLY_ARG_TAGS = /^(?:<\/?arg_(?:key|value)>)+$/;
+/** Leading arg tags on a line that still carries content after them. */
+const LEADING_ARG_TAGS = /^(?:<\/?arg_(?:key|value)>)+/;
+
+/**
+ * Quote bare object keys — `{filePath: "x"}` becomes `{"filePath": "x"}` —
+ * without touching text inside string values.
+ */
+function quoteBareKeys(text: string): string {
+  let out = '';
+  let inString = false;
+  let escaped = false;
+  let i = 0;
+
+  while (i < text.length) {
+    const ch = text[i];
+
+    if (inString) {
+      out += ch;
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      i++;
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+      out += ch;
+      i++;
+      continue;
+    }
+
+    const key = /^([A-Za-z_][\w.-]*)(\s*:)/.exec(text.slice(i));
+    if (key && /[{,[]\s*$/.test(out)) {
+      out += `"${key[1]}"${key[2]}`;
+      i += key[0].length;
+      continue;
+    }
+
+    out += ch;
+    i++;
+  }
+
+  return out;
+}
+
+/**
+ * The function name outside the payload, with a JSON-ish body after it.
+ *
+ * ```
+ * <tool_call>edit(filePath:"/src/app.css", oldString:"a", newString:"b")
+ * <tool_call>read{filePath: "/src/app.css"}
+ * ```
+ *
+ * Only two liberties are taken over strict JSON — parentheses standing in for
+ * braces, and unquoted keys — and both are mechanical to undo. The values
+ * themselves are left to `JSON.parse`, so escapes and embedded quotes survive
+ * exactly as the model wrote them.
+ *
+ * Anything more mangled than this is not repaired. Guessing where one argument
+ * ends and the next begins produced calls that looked plausible and were wrong,
+ * which is worse than not calling at all — see the E2EE caveat in the README.
+ */
+function parseNameThenJsonBody(
+  text: string,
+  lookup?: Map<string, ToolFunctionDefinition>
+): ToolCall[] {
+  if (!lookup || lookup.size === 0) return [];
+
+  const body = text.trim();
+  // Longest first, so `read` cannot claim a body that belongs to `read_file`.
+  const name = [...lookup.keys()]
+    .sort((a, b) => b.length - a.length)
+    .find((candidate) => body.startsWith(candidate));
+  if (!name) return [];
+
+  const rest = body.slice(name.length).trim();
+  const inner = rest.startsWith('(')
+    ? rest.replace(/^\(/, '').replace(/\)\s*$/, '')
+    : rest.startsWith('{')
+      ? rest.replace(/^\{/, '').replace(/\}\s*$/, '')
+      : null;
+  if (inner === null) return [];
+
+  const parsed = parseJsonLoose(quoteBareKeys(`{${inner}}`));
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return [];
+
+  return [
+    {
+      id: generateToolCallId(),
+      type: 'function',
+      function: {
+        name,
+        arguments: parseArgumentsToJsonString(parsed, lookup.get(name)),
+      },
     },
   ];
 }
@@ -591,10 +809,19 @@ function parseLineDelimitedBody(
 ): ToolCall[] {
   if (!lookup || lookup.size === 0) return [];
 
-  const lines = text
+  // A half-dropped `</arg_value>` or `<arg_key>` is common in this form. Lines
+  // that are nothing but tags are separators the model failed to place, so they
+  // are dropped; anything else keeps its text for now. Nothing here edits a line
+  // that might be a value — the positions that decides are not known yet.
+  const lines: string[] = text
     .split('\n')
     .map((line) => line.trim())
     .filter(Boolean);
+  // Only a trailing run of tag-only lines is a separator the model misplaced.
+  // Dropping one from the middle would shift the key/value alternation and can
+  // pair a key with somebody else's value, so those are left in place — they
+  // break the parity check below and the call is refused rather than invented.
+  while (lines.length > 0 && ONLY_ARG_TAGS.test(lines[lines.length - 1])) lines.pop();
   if (lines.length < 3) return [];
 
   const name = lines[0];
@@ -610,7 +837,13 @@ function parseLineDelimitedBody(
 
   const args: Record<string, unknown> = {};
   for (let i = 0; i < rest.length; i += 2) {
-    const key = rest[i];
+    // Now the alternation is fixed, so `rest[i]` is a key and `rest[i + 1]` is
+    // its value. A key may still carry the tag whose partner went missing —
+    // `<arg_key>include` — and stripping it there is safe precisely because a
+    // value can never reach this branch. Values are passed through untouched:
+    // searching for the literal text of a tag is a legitimate thing to do, and
+    // a silently edited pattern would run and return the wrong answer.
+    const key = rest[i].replace(LEADING_ARG_TAGS, '');
     if (!declared.has(key)) return [];
     args[key] = parseArgValue(rest[i + 1]);
   }
@@ -840,6 +1073,9 @@ export class ToolCallStreamParser {
 
     const tagged = parseArgKeyValueBody(text, this.lookup);
     if (tagged.length > 0) return tagged;
+
+    const jsonBody = parseNameThenJsonBody(text, this.lookup);
+    if (jsonBody.length > 0) return jsonBody;
 
     return parseLineDelimitedBody(text, this.lookup);
   }
