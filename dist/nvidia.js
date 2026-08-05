@@ -38,17 +38,19 @@ function parseNrasResponse(body) {
         throw new Error('NRAS response is not a detached EAT bundle');
     }
     const head = body[0];
-    if (!Array.isArray(head) || typeof head[1] !== 'string') {
+    if (!Array.isArray(head) || head[0] !== 'JWT' || typeof head[1] !== 'string') {
         throw new Error('NRAS response carries no overall attestation token');
     }
     const tail = body[1];
-    if (typeof tail !== 'object' || tail === null) {
+    if (typeof tail !== 'object' || tail === null || Array.isArray(tail)) {
         throw new Error('NRAS response carries no per-GPU tokens');
     }
     const perGpu = {};
     for (const [name, token] of Object.entries(tail)) {
-        if (typeof token === 'string')
-            perGpu[name] = token;
+        if (typeof token !== 'string') {
+            throw new Error(`NRAS response carries an invalid token for GPU ${name}`);
+        }
+        perGpu[name] = token;
     }
     return { overall: head[1], perGpu };
 }

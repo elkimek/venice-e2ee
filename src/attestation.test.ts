@@ -6,6 +6,7 @@ import {
   type AttestationResponse,
 } from './attestation.js';
 import { toHex, fromHex } from './crypto.js';
+import type { GpuVerifyResult } from './types.js';
 
 // ── Helpers to build mock TDX quotes ──────────────────────────────────
 
@@ -251,7 +252,7 @@ describe('verifyAttestation', () => {
 
   const GPU_PAYLOAD = JSON.stringify({ arch: 'HOPPER', evidence_list: [] });
 
-  function gpuResult(overrides: Record<string, unknown> = {}) {
+  function gpuResult(overrides: Partial<GpuVerifyResult> = {}): GpuVerifyResult {
     return {
       overallResult: true,
       eatNonce: toHex(clientNonce),
@@ -266,12 +267,13 @@ describe('verifyAttestation', () => {
           eatNonce: toHex(clientNonce),
         },
       },
+      tokensVerified: false,
       rawTokens: { overall: 'a.b.c', perGpu: { 'GPU-0': 'a.b.c' } },
       ...overrides,
     };
   }
 
-  const gpuVerifier = (result = gpuResult()) => async () => result as never;
+  const gpuVerifier = (result = gpuResult()) => async () => result;
 
   it('accepts GPU evidence NVIDIA vouches for with a matching nonce', async () => {
     const result = await verifyAttestation(
@@ -320,7 +322,7 @@ describe('verifyAttestation', () => {
       clientNonce,
       { gpuVerifier: gpuVerifier(bad) }
     );
-    expect(result.errors).toContainEqual(expect.stringContaining('debug mode'));
+    expect(result.errors).toContainEqual(expect.stringContaining('debug mode disabled'));
   });
 
   it('rejects a GPU with secure boot off or failed measurements', async () => {
@@ -332,8 +334,46 @@ describe('verifyAttestation', () => {
       clientNonce,
       { gpuVerifier: gpuVerifier(bad) }
     );
-    expect(result.errors).toContainEqual(expect.stringContaining('secure boot disabled'));
+    expect(result.errors).toContainEqual(expect.stringContaining('secure boot enabled'));
     expect(result.errors).toContainEqual(expect.stringContaining('reference values'));
+  });
+
+  it('fails closed when required per-GPU security claims are missing', async () => {
+    const bad = gpuResult();
+    bad.gpus['GPU-0'].secureBoot = null;
+    bad.gpus['GPU-0'].debugStatus = null;
+    bad.gpus['GPU-0'].measurementResult = null;
+    bad.gpus['GPU-0'].reportNonceMatch = null;
+    bad.gpus['GPU-0'].eatNonce = null;
+
+    const result = await verifyAttestation(
+      makeResponse({ nvidia_payload: GPU_PAYLOAD }),
+      clientNonce,
+      { gpuVerifier: gpuVerifier(bad) }
+    );
+
+    expect(result.gpuVerified).toBe(false);
+    expect(result.errors).toContainEqual(expect.stringContaining('secboot=missing'));
+    expect(result.errors).toContainEqual(expect.stringContaining('dbgstat=missing'));
+    expect(result.errors).toContainEqual(expect.stringContaining('measres=missing'));
+    expect(result.errors).toContainEqual(expect.stringContaining('nonce-match=missing'));
+    expect(result.errors).toContainEqual(expect.stringContaining('GPU GPU-0 token carries no eat_nonce'));
+  });
+
+  it('rejects a per-GPU token whose eat_nonce belongs to another request', async () => {
+    const bad = gpuResult();
+    bad.gpus['GPU-0'].eatNonce = 'b'.repeat(64);
+
+    const result = await verifyAttestation(
+      makeResponse({ nvidia_payload: GPU_PAYLOAD }),
+      clientNonce,
+      { gpuVerifier: gpuVerifier(bad) }
+    );
+
+    expect(result.gpuVerified).toBe(false);
+    expect(result.errors).toContainEqual(
+      expect.stringContaining('GPU GPU-0 token eat_nonce does not match')
+    );
   });
 
   it('rejects a verdict that names no GPUs', async () => {

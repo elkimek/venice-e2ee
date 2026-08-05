@@ -19,11 +19,10 @@
  *    NVIDIA's reference measurements (RIM) for the running VBIOS and driver.
  *    That is a real root of trust, and a stronger statement than a provider's
  *    own claim about its hardware.
- *  - The verdict is still NRAS's rather than yours. The returned tokens are
- *    signed (ES384), but this module authenticates them by TLS to
- *    nras.attestation.nvidia.com rather than by checking that signature, so a
- *    relayed or cached token proves nothing here. `rawTokens` is exposed for
- *    callers who want to verify the signature against NVIDIA's JWKS themselves.
+ *  - The verdict is still NRAS's rather than yours. By default the returned
+ *    tokens are authenticated by TLS to nras.attestation.nvidia.com. Pass a
+ *    `tokenVerifier` from `createNrasTokenVerifier()` to check every ES384
+ *    signature against NVIDIA's JWKS as well.
  *  - Nothing in the GPU evidence binds it to the TDX quote in the same
  *    attestation response. A shared nonce shows both were produced for the same
  *    request; it does not show they came from the same machine.

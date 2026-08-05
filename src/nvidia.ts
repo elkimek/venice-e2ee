@@ -19,11 +19,10 @@
  *    NVIDIA's reference measurements (RIM) for the running VBIOS and driver.
  *    That is a real root of trust, and a stronger statement than a provider's
  *    own claim about its hardware.
- *  - The verdict is still NRAS's rather than yours. The returned tokens are
- *    signed (ES384), but this module authenticates them by TLS to
- *    nras.attestation.nvidia.com rather than by checking that signature, so a
- *    relayed or cached token proves nothing here. `rawTokens` is exposed for
- *    callers who want to verify the signature against NVIDIA's JWKS themselves.
+ *  - The verdict is still NRAS's rather than yours. By default the returned
+ *    tokens are authenticated by TLS to nras.attestation.nvidia.com. Pass a
+ *    `tokenVerifier` from `createNrasTokenVerifier()` to check every ES384
+ *    signature against NVIDIA's JWKS as well.
  *  - Nothing in the GPU evidence binds it to the TDX quote in the same
  *    attestation response. A shared nonce shows both were produced for the same
  *    request; it does not show they came from the same machine.
@@ -93,16 +92,19 @@ function parseNrasResponse(body: unknown): { overall: string; perGpu: Record<str
     throw new Error('NRAS response is not a detached EAT bundle');
   }
   const head = body[0];
-  if (!Array.isArray(head) || typeof head[1] !== 'string') {
+  if (!Array.isArray(head) || head[0] !== 'JWT' || typeof head[1] !== 'string') {
     throw new Error('NRAS response carries no overall attestation token');
   }
   const tail = body[1];
-  if (typeof tail !== 'object' || tail === null) {
+  if (typeof tail !== 'object' || tail === null || Array.isArray(tail)) {
     throw new Error('NRAS response carries no per-GPU tokens');
   }
   const perGpu: Record<string, string> = {};
   for (const [name, token] of Object.entries(tail as Record<string, unknown>)) {
-    if (typeof token === 'string') perGpu[name] = token;
+    if (typeof token !== 'string') {
+      throw new Error(`NRAS response carries an invalid token for GPU ${name}`);
+    }
+    perGpu[name] = token;
   }
   return { overall: head[1], perGpu };
 }

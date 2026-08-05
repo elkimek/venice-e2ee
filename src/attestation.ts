@@ -464,20 +464,34 @@ export async function verifyAttestation(
       }
 
       for (const [name, claims] of Object.entries(gpu.gpus)) {
-        if (claims.debugStatus !== null && claims.debugStatus !== 'disabled') {
-          errors.push(`GPU ${name} is in debug mode (dbgstat=${claims.debugStatus})`);
-        }
-        if (claims.secureBoot === false) {
-          errors.push(`GPU ${name} reports secure boot disabled`);
-        }
-        if (claims.measurementResult !== null && claims.measurementResult !== 'success') {
+        if (claims.debugStatus !== 'disabled') {
           errors.push(
-            `GPU ${name} measurements did not match NVIDIA's reference values ` +
-            `(measres=${claims.measurementResult})`
+            `GPU ${name} did not assert debug mode disabled ` +
+            `(dbgstat=${claims.debugStatus ?? 'missing'})`
           );
         }
-        if (claims.reportNonceMatch === false) {
-          errors.push(`GPU ${name} attestation report did not echo the submitted nonce`);
+        if (claims.secureBoot !== true) {
+          errors.push(
+            `GPU ${name} did not assert secure boot enabled ` +
+            `(secboot=${claims.secureBoot ?? 'missing'})`
+          );
+        }
+        if (claims.measurementResult !== 'success') {
+          errors.push(
+            `GPU ${name} did not assert measurements matched NVIDIA's reference values ` +
+            `(measres=${claims.measurementResult ?? 'missing'})`
+          );
+        }
+        if (claims.reportNonceMatch !== true) {
+          errors.push(
+            `GPU ${name} did not assert that its attestation report echoed the submitted nonce ` +
+            `(nonce-match=${claims.reportNonceMatch ?? 'missing'})`
+          );
+        }
+        if (claims.eatNonce === null) {
+          errors.push(`GPU ${name} token carries no eat_nonce to bind it to this request`);
+        } else if (normalizeMeasurement(claims.eatNonce) !== clientNonceHex) {
+          errors.push(`GPU ${name} token eat_nonce does not match the nonce sent`);
         }
       }
 

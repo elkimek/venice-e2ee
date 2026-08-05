@@ -20,14 +20,16 @@
  *
  *  - It verifies ES384 over the JWS signing input using the key whose `kid`
  *    the token names, refusing any other algorithm so a token cannot talk the
- *    verifier into a weaker one. `exp`, `nbf` and `iss` are checked too.
+ *    verifier into a weaker one. `iss` and a finite `exp` are required, and an
+ *    optional `nbf` is validated when present.
  *  - It authenticates the *key set* by TLS to NVIDIA, the same anchor the
  *    direct call uses. It does not perform RFC 5280 path validation over the
  *    `x5c` chain — that is a hand-rolled X.509 validator's worth of
  *    security-critical code, and getting it subtly wrong is the normal outcome.
  *    Instead the leaf certificate is required to carry the same public key as
- *    the JWK, and `pinnedCertSha256` lets an operator who obtained NVIDIA's
- *    intermediate or root out of band require it to appear in the chain.
+ *    the JWK. `pinnedLeafCertSha256` can replace the TLS trust anchor with exact
+ *    leaf-certificate fingerprints obtained out of band; intermediate and root
+ *    pins are deliberately unsupported without path validation.
  */
 /** NVIDIA's published key set for attestation tokens. */
 export declare const NRAS_JWKS_URL = "https://nras.attestation.nvidia.com/.well-known/jwks.json";
@@ -36,16 +38,20 @@ export declare const NRAS_ISSUER = "https://nras.attestation.nvidia.com";
 export interface NrasTokenVerifierOptions {
     /** Override the JWKS location (a mirror, or a test double). */
     jwksUrl?: string;
-    /** How long a fetched key set may be reused. Default 15 minutes. */
+    /** How long a fetched key set may be reused. Default 12 hours. */
     cacheTtlMs?: number;
     /** Tolerance for exp/nbf against local clock drift. Default 60s. */
     clockSkewSec?: number;
     /**
-     * SHA-256 hex digests of DER certificates that must appear in the token's
-     * `x5c` chain. Supply NVIDIA's intermediate or root, obtained out of band, to
-     * stop trusting the TLS fetch alone. Empty means no pinning.
+     * SHA-256 hex digests of exact DER leaf certificates accepted for the JWK.
+     *
+     * Obtain the short-lived NVIDIA leaf fingerprints out of band. Only the
+     * first `x5c` entry is eligible: accepting a root or intermediate merely
+     * because it appears later in an unvalidated array would not authenticate
+     * the leaf or its public key. Empty means the JWKS remains authenticated by
+     * TLS to `jwksUrl`.
      */
-    pinnedCertSha256?: string[];
+    pinnedLeafCertSha256?: string[];
     /** Override the fetch implementation. Defaults to global fetch. */
     fetchImpl?: typeof fetch;
     /** Override the clock, in ms since epoch. For tests. */

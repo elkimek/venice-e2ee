@@ -150,7 +150,7 @@ const e2ee = createVeniceE2EE({
 });
 ```
 
-The verifier submits the payload verbatim to NVIDIA's Remote Attestation Service, which validates the GPU's report against the endorsement chain rooted in a key burned into the die and against NVIDIA's reference measurements for the running VBIOS and driver. The policy then requires `eat_nonce` in NVIDIA's signed token to equal the nonce this session sent, plus `secboot`, `dbgstat: "disabled"` and `measres: "success"` on every GPU named. `requireGpu: true` also fails when no GPU evidence is served at all, so a provider cannot skip the check by omitting the payload.
+The verifier submits the payload verbatim to NVIDIA's Remote Attestation Service, which validates the GPU's report against the endorsement chain rooted in a key burned into the die and against NVIDIA's reference measurements for the running VBIOS and driver. The policy then requires `eat_nonce` in the overall and every per-GPU token to equal the nonce this session sent, plus positive `secboot`, `dbgstat: "disabled"`, `measres: "success"`, and report-nonce-match claims on every GPU named. Missing or mistyped security claims fail closed. `requireGpu: true` also fails when no GPU evidence is served at all, so a provider cannot skip the check by omitting the payload.
 
 #### Token signature verification
 
@@ -164,13 +164,13 @@ const gpuVerifier = createNvidiaVerifier({
 });
 ```
 
-Every token is checked, overall and per-GPU, and any failure rejects the whole result — there is no path where an unverified token's claims get used. `gpu.tokensVerified` reports whether this ran. Alongside the signature it pins the algorithm to ES384 (so a token cannot negotiate itself down to `none`), and checks `iss`, `exp` and `nbf`.
+Every token is checked, overall and per-GPU, and any failure rejects the whole result — there is no path where an unverified token's claims get used. `gpu.tokensVerified` reports whether this ran. Alongside the signature it pins the algorithm to ES384 (so a token cannot negotiate itself down to `none`), requires the expected `iss` and a finite `exp`, and validates `nbf` when present.
 
-The signing certificate's own validity window is enforced per token, which is what bounds a withdrawn key: NVIDIA issues these leaves for about 48 hours (measured, not assumed), so a key that leaves the published set stops working on NVIDIA's schedule rather than on the cache's. That in turn means the key set does not need frequent polling — it is cached for 12 hours, and refetched whenever a token names a `kid` not held, rate-limited so a malformed token cannot turn into a request flood.
+The key set is cached for 12 hours and refetched whenever a token names a `kid` not held, rate-limited so a malformed token cannot turn into a request flood. The TTL is the maximum time a still-cached withdrawn key remains trusted. When NVIDIA publishes an `x5c` chain, the signing leaf's own roughly 48-hour validity window is enforced as an additional bound.
 
 What this buys beyond the TLS default: the token stands on its own. It can be relayed by the provider, cached, logged, or handed to someone else, and still be checkable — which is the groundwork for verifying GPU evidence without a round trip to NVIDIA per session.
 
-`pinnedCertSha256` takes SHA-256 digests of NVIDIA certificates that must appear in the token's `x5c` chain, for operators who have obtained NVIDIA's intermediate or root out of band and would rather not rely on the TLS fetch at all. `VerifiedNrasToken.chainSha256` reports the chain's digests so they can be recorded. Note that this is deliberately *not* RFC 5280 path validation — that is a hand-rolled X.509 validator's worth of security-critical code — but the leaf certificate is required to carry the same public key as the JWK.
+`pinnedLeafCertSha256` takes SHA-256 digests of exact NVIDIA signing leaf certificates obtained out of band. When configured, the first `x5c` certificate must match one of those fingerprints and carry the JWK's public key, so an unrelated root or intermediate appended to an unvalidated array cannot satisfy the pin. NVIDIA rotates these short-lived leaves, so operators must provision overlapping current fingerprints. `VerifiedNrasToken.chainSha256` reports the observed chain digests. Root and intermediate pinning are deliberately unsupported because that would require full RFC 5280 path validation.
 
 #### Limits
 

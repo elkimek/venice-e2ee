@@ -11,7 +11,11 @@ export interface DcapVerifyResult {
  * Use `createDcapVerifier()` from `venice-e2ee/dcap` for the default implementation.
  */
 export type DcapVerifier = (quoteBytes: Uint8Array) => Promise<DcapVerifyResult>;
-/** Claims NVIDIA asserts about one GPU in an attested node. */
+/**
+ * Claims NVIDIA asserts about one GPU in an attested node.
+ * Missing or mistyped claims are represented as null and fail the default GPU
+ * policy rather than being treated as a secure state.
+ */
 export interface NvidiaGpuClaims {
     /** Hardware model, e.g. "GH100 A01 GSP BROM". */
     hwModel: string | null;

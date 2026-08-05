@@ -142,6 +142,37 @@ describe('createNvidiaVerifier', () => {
     );
   });
 
+  it('rejects a malformed per-GPU token instead of silently dropping that GPU', async () => {
+    const bundle = makeBundle();
+    (bundle[1] as Record<string, unknown>)['GPU-1'] = null;
+    const { impl } = stubFetch(bundle);
+
+    await expect(createNvidiaVerifier({ fetchImpl: impl })(PAYLOAD)).rejects.toThrow(
+      /invalid token for GPU GPU-1/
+    );
+  });
+
+  it('maps mistyped security claims to null so the policy can fail closed', async () => {
+    const { impl } = stubFetch(
+      makeBundle({
+        gpus: {
+          'GPU-0': {
+            secboot: 'true',
+            dbgstat: false,
+            measres: true,
+            'x-nvidia-gpu-attestation-report-nonce-match': 'true',
+          },
+        },
+      })
+    );
+
+    const result = await createNvidiaVerifier({ fetchImpl: impl })(PAYLOAD);
+    expect(result.gpus['GPU-0'].secureBoot).toBeNull();
+    expect(result.gpus['GPU-0'].debugStatus).toBeNull();
+    expect(result.gpus['GPU-0'].measurementResult).toBeNull();
+    expect(result.gpus['GPU-0'].reportNonceMatch).toBeNull();
+  });
+
   it('reports that signatures went unchecked when no token verifier is set', async () => {
     const { impl } = stubFetch(makeBundle());
     const result = await createNvidiaVerifier({ fetchImpl: impl })(PAYLOAD);

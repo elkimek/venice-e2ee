@@ -20,14 +20,16 @@
  *
  *  - It verifies ES384 over the JWS signing input using the key whose `kid`
  *    the token names, refusing any other algorithm so a token cannot talk the
- *    verifier into a weaker one. `exp`, `nbf` and `iss` are checked too.
+ *    verifier into a weaker one. `iss` and a finite `exp` are required, and an
+ *    optional `nbf` is validated when present.
  *  - It authenticates the *key set* by TLS to NVIDIA, the same anchor the
  *    direct call uses. It does not perform RFC 5280 path validation over the
  *    `x5c` chain — that is a hand-rolled X.509 validator's worth of
  *    security-critical code, and getting it subtly wrong is the normal outcome.
  *    Instead the leaf certificate is required to carry the same public key as
- *    the JWK, and `pinnedCertSha256` lets an operator who obtained NVIDIA's
- *    intermediate or root out of band require it to appear in the chain.
+ *    the JWK. `pinnedLeafCertSha256` can replace the TLS trust anchor with exact
+ *    leaf-certificate fingerprints obtained out of band; intermediate and root
+ *    pins are deliberately unsupported without path validation.
  */
 
 /** NVIDIA's published key set for attestation tokens. */
@@ -39,14 +41,13 @@ export const NRAS_ISSUER = 'https://nras.attestation.nvidia.com';
 /**
  * How long a fetched key set may be reused.
  *
- * Deliberately long, because neither job this could do needs it short:
+ * The cache has two security jobs:
  *
  *  - Rotation is handled by refetching when a token names an unknown `kid`,
  *    which needs no TTL at all.
- *  - A key being *withdrawn* is invisible to that check, but the signing
- *    certificates carry their own ~48-hour expiry, and that is enforced per
- *    token. So a withdrawn key stops working on NVIDIA's schedule rather than
- *    on the cache's, and polling faster buys almost nothing.
+ *  - A key being *withdrawn* is invisible to that check. TTL refresh is what
+ *    notices removal, while the signing leaf's validity window provides an
+ *    additional upper bound whenever NVIDIA publishes an `x5c` chain.
  *
  * NVIDIA publishes no Cache-Control, ETag or Expires on the key set, so there
  * is nothing to honour and the value is ours to choose. Twelve hours keeps the
@@ -62,16 +63,20 @@ const DEFAULT_CLOCK_SKEW_SEC = 60;
 export interface NrasTokenVerifierOptions {
   /** Override the JWKS location (a mirror, or a test double). */
   jwksUrl?: string;
-  /** How long a fetched key set may be reused. Default 15 minutes. */
+  /** How long a fetched key set may be reused. Default 12 hours. */
   cacheTtlMs?: number;
   /** Tolerance for exp/nbf against local clock drift. Default 60s. */
   clockSkewSec?: number;
   /**
-   * SHA-256 hex digests of DER certificates that must appear in the token's
-   * `x5c` chain. Supply NVIDIA's intermediate or root, obtained out of band, to
-   * stop trusting the TLS fetch alone. Empty means no pinning.
+   * SHA-256 hex digests of exact DER leaf certificates accepted for the JWK.
+   *
+   * Obtain the short-lived NVIDIA leaf fingerprints out of band. Only the
+   * first `x5c` entry is eligible: accepting a root or intermediate merely
+   * because it appears later in an unvalidated array would not authenticate
+   * the leaf or its public key. Empty means the JWKS remains authenticated by
+   * TLS to `jwksUrl`.
    */
-  pinnedCertSha256?: string[];
+  pinnedLeafCertSha256?: string[];
   /** Override the fetch implementation. Defaults to global fetch. */
   fetchImpl?: typeof fetch;
   /** Override the clock, in ms since epoch. For tests. */
@@ -258,12 +263,19 @@ export function createNrasTokenVerifier(options: NrasTokenVerifierOptions = {}):
     jwksUrl = NRAS_JWKS_URL,
     cacheTtlMs = DEFAULT_CACHE_TTL_MS,
     clockSkewSec = DEFAULT_CLOCK_SKEW_SEC,
-    pinnedCertSha256 = [],
+    pinnedLeafCertSha256 = [],
     fetchImpl,
     now = () => Date.now(),
   } = options;
 
-  const pinned = new Set(pinnedCertSha256.map((d) => d.toLowerCase()));
+  const pinnedLeaves = new Set(
+    pinnedLeafCertSha256.map((digest) => {
+      if (!/^[0-9a-f]{64}$/i.test(digest)) {
+        throw new Error('NRAS pinned leaf certificate digest must be 64 hexadecimal characters');
+      }
+      return digest.toLowerCase();
+    })
+  );
 
   let cache: Map<string, JwksKey> | null = null;
   let cachedAt = 0;
@@ -433,9 +445,9 @@ export function createNrasTokenVerifier(options: NrasTokenVerifierOptions = {}):
         throw new Error('NRAS certificate chain does not carry the JWK public key');
       }
 
-      // This is what bounds a withdrawn key. NVIDIA issues these leaves for
-      // about 48 hours, so a key that leaves the published set stops being
-      // usable on its own schedule rather than only when the cache expires.
+      // NVIDIA currently issues these leaves for about 48 hours. Enforcing the
+      // window prevents an otherwise valid cached key from outliving its leaf;
+      // the JWKS cache TTL independently notices keys removed before then.
       const { notBefore, notAfter } = certificateValidity(chainDer[0]);
       const skewMs = clockSkewSec * 1000;
       if (now() > notAfter + skewMs) {
@@ -451,8 +463,11 @@ export function createNrasTokenVerifier(options: NrasTokenVerifierOptions = {}):
     }
     const chainSha256 = await Promise.all(chainDer.map(sha256Hex));
 
-    if (pinned.size > 0 && !chainSha256.some((d) => pinned.has(d))) {
-      throw new Error('NRAS certificate chain contains none of the pinned certificates');
+    if (pinnedLeaves.size > 0) {
+      const leafDigest = chainSha256[0];
+      if (leafDigest === undefined || !pinnedLeaves.has(leafDigest)) {
+        throw new Error('NRAS signing leaf certificate does not match a pinned fingerprint');
+      }
     }
 
     const claims = decodeJsonSegment(payload, 'payload');
@@ -461,8 +476,18 @@ export function createNrasTokenVerifier(options: NrasTokenVerifierOptions = {}):
       throw new Error(`NRAS token issuer is ${String(claims.iss)}, expected ${NRAS_ISSUER}`);
     }
 
+    if (typeof claims.exp !== 'number' || !Number.isFinite(claims.exp)) {
+      throw new Error('NRAS token has no valid expiration (exp)');
+    }
+    if (
+      claims.nbf !== undefined &&
+      (typeof claims.nbf !== 'number' || !Number.isFinite(claims.nbf))
+    ) {
+      throw new Error('NRAS token has an invalid not-before time (nbf)');
+    }
+
     const nowSec = Math.floor(now() / 1000);
-    if (typeof claims.exp === 'number' && nowSec > claims.exp + clockSkewSec) {
+    if (nowSec > claims.exp + clockSkewSec) {
       throw new Error('NRAS token has expired');
     }
     if (typeof claims.nbf === 'number' && nowSec + clockSkewSec < claims.nbf) {

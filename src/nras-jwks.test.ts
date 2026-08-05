@@ -201,9 +201,27 @@ describe('createNrasTokenVerifier', () => {
     await expect(verify(await makeToken({ exp: nowSec - 3600 }))).rejects.toThrow(/has expired/);
   });
 
+  it('rejects a token without a finite expiration', async () => {
+    const { verify } = await verifierWith(await jwksBody());
+    await expect(verify(await makeToken({ exp: undefined }))).rejects.toThrow(
+      /no valid expiration/
+    );
+    await expect(verify(await makeToken({ exp: 'never' }))).rejects.toThrow(
+      /no valid expiration/
+    );
+  });
+
   it('rejects a token that is not valid yet', async () => {
     const { verify } = await verifierWith(await jwksBody());
     await expect(verify(await makeToken({ nbf: nowSec + 3600 }))).rejects.toThrow(/not valid yet/);
+  });
+
+  it('allows an omitted nbf but rejects a mistyped one', async () => {
+    const { verify } = await verifierWith(await jwksBody());
+    await expect(verify(await makeToken({ nbf: undefined }))).resolves.toBeDefined();
+    await expect(verify(await makeToken({ nbf: 'tomorrow' }))).rejects.toThrow(
+      /invalid not-before/
+    );
   });
 
   it('tolerates small clock skew around exp', async () => {
@@ -451,8 +469,8 @@ describe('createNrasTokenVerifier', () => {
     });
 
     it('rejects a token signed by an expired certificate', async () => {
-      // The bound that lets the key set be cached for hours rather than minutes:
-      // a withdrawn key stops working on NVIDIA's ~48h schedule regardless.
+      // An independent upper bound in addition to removal detection on the
+      // JWKS cache TTL: a cached key cannot outlive its signing leaf.
       const { body } = await chainBody({
         notBefore: NOW_MS - 72 * 3600_000,
         notAfter: NOW_MS - 24 * 3600_000,
@@ -479,16 +497,45 @@ describe('createNrasTokenVerifier', () => {
       await expect(verify(await makeToken())).resolves.toBeDefined();
     });
 
-    it('accepts a chain containing the pinned certificate', async () => {
+    it('accepts an exact pinned leaf certificate', async () => {
       const { body, digest } = await chainBody();
-      const { verify } = await verifierWith(body, { pinnedCertSha256: [digest] });
+      const { verify } = await verifierWith(body, { pinnedLeafCertSha256: [digest] });
       await expect(verify(await makeToken())).resolves.toBeDefined();
     });
 
-    it('rejects a chain that lacks every pinned certificate', async () => {
+    it('rejects an unpinned leaf certificate', async () => {
       const { body } = await chainBody();
-      const { verify } = await verifierWith(body, { pinnedCertSha256: ['00'.repeat(32)] });
-      await expect(verify(await makeToken())).rejects.toThrow(/none of the pinned certificates/);
+      const { verify } = await verifierWith(body, {
+        pinnedLeafCertSha256: ['00'.repeat(32)],
+      });
+      await expect(verify(await makeToken())).rejects.toThrow(/does not match a pinned fingerprint/);
+    });
+
+    it('does not trust a pinned certificate merely appended after an unpinned leaf', async () => {
+      const { body } = await chainBody();
+      const unrelated = await buildCert({
+        notBefore: NOW_MS - 2 * 3600_000,
+        notAfter: NOW_MS + 43 * 3600_000,
+      });
+      const unrelatedB64 = btoa(
+        Array.from(unrelated, (b) => String.fromCharCode(b)).join('')
+      );
+      const unrelatedDigest = Array.from(
+        new Uint8Array(await crypto.subtle.digest('SHA-256', unrelated.buffer as ArrayBuffer)),
+        (b) => b.toString(16).padStart(2, '0')
+      ).join('');
+      (body.keys[0] as { x5c: string[] }).x5c.push(unrelatedB64);
+
+      const { verify } = await verifierWith(body, {
+        pinnedLeafCertSha256: [unrelatedDigest],
+      });
+      await expect(verify(await makeToken())).rejects.toThrow(/does not match a pinned fingerprint/);
+    });
+
+    it('rejects malformed pinned leaf fingerprints at configuration time', () => {
+      expect(() =>
+        createNrasTokenVerifier({ pinnedLeafCertSha256: ['not-a-sha256-digest'] })
+      ).toThrow(/64 hexadecimal characters/);
     });
 
     it('reports the chain digests for an operator to pin', async () => {
