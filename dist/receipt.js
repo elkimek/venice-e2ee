@@ -302,14 +302,22 @@ export async function verifyReceipt(signatureResponse, attestation, options) {
     // responses carry neither field.
     const signedText = signatureResponse.text;
     const topLevelSignature = signatureResponse.signature;
-    if (typeof signedText === 'string' && typeof topLevelSignature === 'string') {
+    if (signedText !== undefined || topLevelSignature !== undefined) {
+        const complete = typeof signedText === 'string' && typeof topLevelSignature === 'string';
+        add('top_level_signature_complete', complete, complete ? undefined : 'top-level receipt signature requires both text and signature strings');
+        if (!complete) {
+            return { verified: false, checks };
+        }
         const expectedText = signedTextForReceipt(receipt, responseHashField);
         add('signed_text_matches_receipt_hashes', expectedText !== null && expectedText === signedText, expectedText === null
             ? 'receipt has no unambiguous request/response hash pair to compare'
             : expectedText === signedText
                 ? undefined
                 : `signature covers "${signedText}", receipt hashes give "${expectedText}"`);
-        if (attestationAddress) {
+        if (!attestationAddress) {
+            add('signature_recovers_to_attested_key', false, 'attestation carried no signing address to compare with the recovered signer');
+        }
+        else {
             try {
                 const recovered = recoverReceiptSigner(signedText, topLevelSignature).toLowerCase();
                 add('signature_recovers_to_attested_key', recovered === attestationAddress, recovered === attestationAddress

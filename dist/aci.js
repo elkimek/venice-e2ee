@@ -106,16 +106,18 @@ export async function verifyAciAttestation(report, nonce, options = {}) {
  * Verify a report that arrived through somebody else.
  *
  * The gateway records the report it fetched from its own upstream, and serves it
- * alongside the attested session. A relying party can check almost all of it:
- * the quote against Intel's roots, the digests it commits to, the endorsement,
- * the debug bit, and whether the channel the gateway bound is a key the upstream
- * actually attested.
+ * alongside the attested session. A relying party can still check the quote
+ * against Intel's roots, its measurements and debug bit, and the internal
+ * consistency of the reported keyset.
  *
- * What it cannot check is freshness. The nonce the gateway sent is not
- * published, so the statement binding cannot be recomputed and a captured report
- * cannot be told from a current one. That gap is what `nonceBound: false`
- * records, and it is why this never returns an anchor: freshness rests on the
- * attested gateway having behaved, bounded by the session's own expiry.
+ * What it cannot check is the REPORTDATA statement. The nonce the gateway sent
+ * is not published, so the verifier cannot recompute the hash that binds the
+ * reported workload id and keyset digest to the quote. Comparing the served
+ * `report_data` with REPORTDATA would only compare two copies of the same opaque
+ * bytes. Consequently this function always reports the missing binding as a
+ * failed check and never returns an anchor. Publishing the original nonce would
+ * establish quote-to-keyset binding, although it still would not make that nonce
+ * fresh or caller-chosen from this verifier's perspective.
  */
 export async function verifyRelayedAciAttestation(report, options = {}) {
     const result = await runAciChecks(report, undefined, options);
@@ -185,14 +187,18 @@ async function runAciChecks(report, nonce, options = {}) {
     add('quote_parsed', true);
     const debugMode = (tdAttributes[0] & 0x01) !== 0;
     add('debug_mode_disabled', !debugMode, debugMode ? 'TD is running in DEBUG mode — its measurements mean nothing' : undefined);
-    // The binding this module exists for. Skipped, never faked, when the nonce
-    // behind the report is not available.
+    // The binding this module exists for. When the nonce behind a relayed report
+    // is unavailable, fail explicitly: the other keyset checks are internally
+    // consistent but do not tie that keyset to the quote.
     if (nonce !== undefined) {
         const expectedReportData = aciReportData(workloadId, keysetDigest, nonce);
         nonceBound = constantTimeEqual(reportData.slice(0, 32), expectedReportData);
         add('report_data_binds_keyset_and_nonce', nonceBound, nonceBound
             ? undefined
             : `quote REPORTDATA starts ${toHex(reportData.slice(0, 32))}, statement hashes to ${toHex(expectedReportData)}`);
+    }
+    else {
+        add('report_data_binds_keyset_and_nonce', false, 'the nonce used for this relayed report was not published, so its keyset cannot be bound to REPORTDATA');
     }
     // The ACI profile fills only the first 32 bytes. A report with anything in
     // the tail is not the shape this verification reasons about.

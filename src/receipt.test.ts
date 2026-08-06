@@ -517,6 +517,49 @@ describe('verifyReceipt', () => {
       );
     });
 
+    it('refuses a partial top-level signature instead of silently skipping it', async () => {
+      const textOnly = await build({ signatureResponse: { text: signedText } });
+      const textOnlyResult = await verifyReceipt(
+        textOnly.signatureResponse,
+        textOnly.attestation,
+        options(textOnly)
+      );
+      expect(textOnlyResult.verified).toBe(false);
+      expect(textOnlyResult.checks).toContainEqual(
+        expect.objectContaining({ name: 'top_level_signature_complete', ok: false })
+      );
+
+      const signatureOnly = await build({
+        signatureResponse: { signature: await personalSign(signedText, privateKey) },
+      });
+      const signatureOnlyResult = await verifyReceipt(
+        signatureOnly.signatureResponse,
+        signatureOnly.attestation,
+        options(signatureOnly)
+      );
+      expect(signatureOnlyResult.verified).toBe(false);
+      expect(signatureOnlyResult.checks).toContainEqual(
+        expect.objectContaining({ name: 'top_level_signature_complete', ok: false })
+      );
+    });
+
+    it('refuses a top-level signature when no attested signing address is available', async () => {
+      const fixture = await signedFixture();
+      delete fixture.attestation.signing_address;
+      delete fixture.signatureResponse.signing_address;
+
+      const result = await verifyReceipt(
+        fixture.signatureResponse,
+        fixture.attestation,
+        options(fixture)
+      );
+
+      expect(result.verified).toBe(false);
+      expect(result.checks).toContainEqual(
+        expect.objectContaining({ name: 'signature_recovers_to_attested_key', ok: false })
+      );
+    });
+
     it('stays silent on gateways that serve neither field', async () => {
       const fixture = await build();
       const result = await verifyReceipt(

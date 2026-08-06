@@ -80,8 +80,8 @@ export interface AciAttestationResult {
      * Whether the quote was shown to commit to a nonce this caller chose.
      *
      * False for a report obtained second-hand, where the nonce that produced it
-     * was never published — every other check still holds, but nothing rules out
-     * a report captured earlier and replayed. Callers must not treat the two as
+     * was never published. In that case neither freshness nor the quote-to-keyset
+     * REPORTDATA statement can be established. Callers must not treat the two as
      * the same evidence.
      */
     nonceBound: boolean;
@@ -147,16 +147,18 @@ export declare function verifyAciAttestation(report: AciAttestationReport, nonce
  * Verify a report that arrived through somebody else.
  *
  * The gateway records the report it fetched from its own upstream, and serves it
- * alongside the attested session. A relying party can check almost all of it:
- * the quote against Intel's roots, the digests it commits to, the endorsement,
- * the debug bit, and whether the channel the gateway bound is a key the upstream
- * actually attested.
+ * alongside the attested session. A relying party can still check the quote
+ * against Intel's roots, its measurements and debug bit, and the internal
+ * consistency of the reported keyset.
  *
- * What it cannot check is freshness. The nonce the gateway sent is not
- * published, so the statement binding cannot be recomputed and a captured report
- * cannot be told from a current one. That gap is what `nonceBound: false`
- * records, and it is why this never returns an anchor: freshness rests on the
- * attested gateway having behaved, bounded by the session's own expiry.
+ * What it cannot check is the REPORTDATA statement. The nonce the gateway sent
+ * is not published, so the verifier cannot recompute the hash that binds the
+ * reported workload id and keyset digest to the quote. Comparing the served
+ * `report_data` with REPORTDATA would only compare two copies of the same opaque
+ * bytes. Consequently this function always reports the missing binding as a
+ * failed check and never returns an anchor. Publishing the original nonce would
+ * establish quote-to-keyset binding, although it still would not make that nonce
+ * fresh or caller-chosen from this verifier's perspective.
  */
 export declare function verifyRelayedAciAttestation(report: AciAttestationReport, options?: VerifyAciAttestationOptions): Promise<AciAttestationResult>;
 /**

@@ -6,6 +6,7 @@ import {
   aciReportData,
   establishAciTrustAnchor,
   verifyAciAttestation,
+  verifyRelayedAciAttestation,
   type AciAttestationReport,
 } from './aci.js';
 import { computeWorkloadId, computeWorkloadKeysetDigest } from './receipt.js';
@@ -224,6 +225,27 @@ describe('verifyAciAttestation', () => {
     });
 
     expect(failed(result)).toContain('measurements_allowed');
+  });
+});
+
+describe('verifyRelayedAciAttestation', () => {
+  it('rejects a self-endorsed keyset paired with opaque REPORTDATA', async () => {
+    const report = await buildReport();
+    const opaqueReportData = sha256(new TextEncoder().encode('unrelated DCAP-valid quote'));
+    report.attestation!.report_data = toHex(opaqueReportData);
+    report.attestation!.evidence!.quote = buildAciQuote(opaqueReportData);
+
+    const result = await verifyRelayedAciAttestation(report, {
+      dcapVerifier: okDcap,
+    });
+
+    expect(result.verified).toBe(false);
+    expect(result.nonceBound).toBe(false);
+    expect(result.anchor).toBeNull();
+    expect(failed(result)).toEqual(['report_data_binds_keyset_and_nonce']);
+    expect(result.checks).toContainEqual(
+      expect.objectContaining({ name: 'dcap_verified', ok: true })
+    );
   });
 });
 

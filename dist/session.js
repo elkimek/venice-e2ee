@@ -21,18 +21,17 @@
  * id trustworthy.
  *
  * Fetched by id, a session also carries the evidence inline as a `data:` URI —
- * the upstream's complete ACI attestation report, quote included. So a relying
- * party can verify the second hop itself rather than taking the gateway's word:
- * DCAP against Intel's roots, the digests the report commits to, its endorsement,
- * and whether the TLS key the gateway bound the channel to is one the upstream
- * actually attested for the host that was dialled.
+ * the upstream's complete ACI attestation report, quote included. A relying
+ * party can authenticate the quote with DCAP, inspect its measurements, and
+ * check that the public record is the one the receipt committed to.
  *
- * One thing stays out of reach. The nonce the gateway sent when it fetched that
- * report is not published, so its statement binding cannot be recomputed and a
- * captured report cannot be distinguished from a current one. Freshness of the
- * second hop rests on the attested gateway having behaved, bounded by the
- * session's own expiry. {@link AttestedSessionResult.upstreamNonceBound} records
- * that rather than letting it pass unstated.
+ * A critical binding stays out of reach. The nonce the gateway sent when it
+ * fetched that report is not published, so the REPORTDATA statement cannot be
+ * recomputed. The relying party therefore cannot prove that the reported keyset
+ * — including its TLS keys — belongs to the DCAP-valid quote, or distinguish a
+ * captured report from a current one. Verification remains false until that
+ * nonce is available. {@link AttestedSessionResult.upstreamNonceBound} records
+ * the missing caller-freshness property separately.
  */
 import { sha256 } from '@noble/hashes/sha2.js';
 import { toHex } from './crypto.js';
@@ -77,12 +76,38 @@ export function decodeSessionEvidence(session) {
     if (typeof data !== 'string')
         return null;
     const comma = data.indexOf(',');
-    if (!data.startsWith('data:') || comma < 0)
-        return null;
+    if (!data.startsWith('data:') || comma < 0) {
+        throw new TypeError('session evidence is not a valid data URI');
+    }
+    const metadata = data.slice('data:'.length, comma).toLowerCase().split(';');
+    if (!metadata.includes('base64')) {
+        throw new TypeError('session evidence data URI must use base64 encoding');
+    }
     const payload = data.slice(comma + 1);
-    const binary = atob(payload.replace(/-/g, '+').replace(/_/g, '/'));
+    const normalized = payload.replace(/-/g, '+').replace(/_/g, '/');
+    if (!/^[a-z0-9+/]*={0,2}$/i.test(normalized) || normalized.length % 4 === 1) {
+        throw new TypeError('session evidence contains invalid base64');
+    }
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
+    let binary;
+    try {
+        binary = atob(padded);
+    }
+    catch {
+        throw new TypeError('session evidence contains invalid base64');
+    }
     const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
-    return { bytes, report: JSON.parse(new TextDecoder().decode(bytes)) };
+    let report;
+    try {
+        report = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+    }
+    catch {
+        throw new TypeError('session evidence is not valid UTF-8 JSON');
+    }
+    if (!report || typeof report !== 'object' || Array.isArray(report)) {
+        throw new TypeError('session evidence JSON must contain an object');
+    }
+    return { bytes, report: report };
 }
 /** Host of a URL, or null when it will not parse. */
 function originHost(value) {
@@ -99,8 +124,10 @@ function originHost(value) {
  * Verify an attested session against the id a signed receipt named.
  *
  * Reports every check rather than throwing. When the session carries the
- * upstream's report and a `dcapVerifier` is supplied, that report is verified
- * too and its checks are folded in under an `upstream.` prefix.
+ * upstream's report and a `dcapVerifier` is supplied, the quote and report are
+ * checked and their results are folded in under an `upstream.` prefix. The
+ * overall result remains false while the nonce required to bind the reported
+ * keyset to REPORTDATA is unavailable.
  */
 export async function verifyAttestedSession(session, options) {
     const checks = [];
@@ -151,13 +178,21 @@ export async function verifyAttestedSession(session, options) {
     }
     if (options.skipEvidence)
         return done(null);
-    const evidence = decodeSessionEvidence(session);
-    if (!evidence) {
+    if (typeof session.evidence?.data !== 'string') {
         // The list endpoint serves digests only; fetch by id to get the report.
         add('evidence_present', false, 'session carries no inline evidence — fetch it by id rather than from the list');
         return done(null);
     }
     add('evidence_present', true);
+    let evidence;
+    try {
+        evidence = decodeSessionEvidence(session);
+        add('evidence_decodes', true);
+    }
+    catch (error) {
+        add('evidence_decodes', false, error instanceof Error ? error.message : String(error));
+        return done(null);
+    }
     const digest = `sha256:${toHex(sha256(evidence.bytes))}`;
     const digestOk = digest === session.evidence?.digest;
     add('evidence_digest_matches', digestOk, digestOk ? undefined : `computed ${digest}, session says ${session.evidence?.digest ?? 'missing'}`);
@@ -174,6 +209,14 @@ export async function verifyAttestedSession(session, options) {
     });
     for (const check of upstream.checks) {
         checks.push({ ...check, name: `upstream.${check.name}` });
+    }
+    // The keyset must first be bound to REPORTDATA. Without the nonce used for a
+    // relayed report, an internally consistent keyset can still be unrelated to
+    // the DCAP-valid quote, so matching a TLS key inside it proves nothing.
+    const keysetQuoteBound = upstream.checks.some((check) => check.name === 'report_data_binds_keyset_and_nonce' && check.ok);
+    if (!keysetQuoteBound) {
+        add('channel_binding_in_attested_keyset', false, 'upstream keyset is not quote-bound because the report nonce was not published');
+        return done(upstream);
     }
     // The check that ties the channel the gateway used to the workload it
     // verified. Without it, a valid report for some other machine would pass.

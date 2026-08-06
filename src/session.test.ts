@@ -147,7 +147,7 @@ describe('computeAttestedSessionId', () => {
 });
 
 describe('verifyAttestedSession', () => {
-  it('verifies a session and the upstream report it carries', async () => {
+  it('checks the relayed evidence without claiming its keyset is quote-bound', async () => {
     const session = await buildSession();
     const result = await verifyAttestedSession(session, {
       expectedSessionId: session.session_id,
@@ -155,8 +155,11 @@ describe('verifyAttestedSession', () => {
       dcapVerifier: okDcap,
     });
 
-    expect(failed(result)).toEqual([]);
-    expect(result.verified).toBe(true);
+    expect(failed(result)).toEqual([
+      'upstream.report_data_binds_keyset_and_nonce',
+      'channel_binding_in_attested_keyset',
+    ]);
+    expect(result.verified).toBe(false);
     expect(result.checks.map((c) => c.name)).toContain('upstream.dcap_verified');
     expect(result.checks.map((c) => c.name)).toContain('channel_binding_in_attested_keyset');
     expect(result.unknownClaims).toEqual(['gpu_attested']);
@@ -171,8 +174,11 @@ describe('verifyAttestedSession', () => {
       dcapVerifier: okDcap,
     });
     expect(result.upstreamNonceBound).toBe(false);
-    expect(result.checks.map((c) => c.name)).not.toContain(
-      'upstream.report_data_binds_keyset_and_nonce'
+    expect(result.checks).toContainEqual(
+      expect.objectContaining({
+        name: 'upstream.report_data_binds_keyset_and_nonce',
+        ok: false,
+      })
     );
     expect(result.upstream?.anchor).toBeNull();
   });
@@ -253,6 +259,45 @@ describe('verifyAttestedSession', () => {
     });
 
     expect(failed(result)).toContain('evidence_present');
+  });
+
+  it('reports invalid base64 evidence without rejecting the verification promise', async () => {
+    const session = await buildSession();
+    session.evidence!.data = 'data:application/json;base64,%%%';
+
+    const result = await verifyAttestedSession(session, {
+      expectedSessionId: session.session_id,
+      dcapVerifier: okDcap,
+    });
+
+    expect(result.verified).toBe(false);
+    expect(failed(result)).toContain('evidence_decodes');
+  });
+
+  it('reports invalid JSON evidence without rejecting the verification promise', async () => {
+    const session = await buildSession();
+    session.evidence!.data = dataUri(new TextEncoder().encode('{not-json'));
+
+    const result = await verifyAttestedSession(session, {
+      expectedSessionId: session.session_id,
+      dcapVerifier: okDcap,
+    });
+
+    expect(result.verified).toBe(false);
+    expect(failed(result)).toContain('evidence_decodes');
+  });
+
+  it('reports a malformed evidence data URI without rejecting', async () => {
+    const session = await buildSession();
+    session.evidence!.data = 'data:application/json,{"report":true}';
+
+    const result = await verifyAttestedSession(session, {
+      expectedSessionId: session.session_id,
+      dcapVerifier: okDcap,
+    });
+
+    expect(result.verified).toBe(false);
+    expect(failed(result)).toContain('evidence_decodes');
   });
 
   it('checks the id alone when the caller skips the evidence', async () => {

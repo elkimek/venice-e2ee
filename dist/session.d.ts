@@ -21,18 +21,17 @@
  * id trustworthy.
  *
  * Fetched by id, a session also carries the evidence inline as a `data:` URI —
- * the upstream's complete ACI attestation report, quote included. So a relying
- * party can verify the second hop itself rather than taking the gateway's word:
- * DCAP against Intel's roots, the digests the report commits to, its endorsement,
- * and whether the TLS key the gateway bound the channel to is one the upstream
- * actually attested for the host that was dialled.
+ * the upstream's complete ACI attestation report, quote included. A relying
+ * party can authenticate the quote with DCAP, inspect its measurements, and
+ * check that the public record is the one the receipt committed to.
  *
- * One thing stays out of reach. The nonce the gateway sent when it fetched that
- * report is not published, so its statement binding cannot be recomputed and a
- * captured report cannot be distinguished from a current one. Freshness of the
- * second hop rests on the attested gateway having behaved, bounded by the
- * session's own expiry. {@link AttestedSessionResult.upstreamNonceBound} records
- * that rather than letting it pass unstated.
+ * A critical binding stays out of reach. The nonce the gateway sent when it
+ * fetched that report is not published, so the REPORTDATA statement cannot be
+ * recomputed. The relying party therefore cannot prove that the reported keyset
+ * — including its TLS keys — belongs to the DCAP-valid quote, or distinguish a
+ * captured report from a current one. Verification remains false until that
+ * nonce is available. {@link AttestedSessionResult.upstreamNonceBound} records
+ * the missing caller-freshness property separately.
  */
 import { type AciAttestationReport, type AciAttestationResult, type AciCheck, type VerifyAciAttestationOptions } from './aci.js';
 /** Path of the unauthenticated attested-session store. */
@@ -66,12 +65,13 @@ export interface AttestedSession {
     };
 }
 export interface AttestedSessionResult {
-    /** True only when every check passed. */
+    /** True only when every required binding passed. Relayed reports currently fail closed. */
     verified: boolean;
     checks: AciCheck[];
     /**
-     * Verification of the upstream's own attestation report, when the session
-     * carried it. Null when no evidence was served or it could not be decoded.
+     * Checks performed on the upstream's attestation report, when the session
+     * carried it. This result remains unverified while the report nonce is absent.
+     * Null when no evidence was served or it could not be decoded.
      */
     upstream: AciAttestationResult | null;
     /**
@@ -112,8 +112,10 @@ export declare function decodeSessionEvidence(session: AttestedSession): {
  * Verify an attested session against the id a signed receipt named.
  *
  * Reports every check rather than throwing. When the session carries the
- * upstream's report and a `dcapVerifier` is supplied, that report is verified
- * too and its checks are folded in under an `upstream.` prefix.
+ * upstream's report and a `dcapVerifier` is supplied, the quote and report are
+ * checked and their results are folded in under an `upstream.` prefix. The
+ * overall result remains false while the nonce required to bind the reported
+ * keyset to REPORTDATA is unavailable.
  */
 export declare function verifyAttestedSession(session: AttestedSession, options: VerifyAttestedSessionOptions): Promise<AttestedSessionResult>;
 //# sourceMappingURL=session.d.ts.map
