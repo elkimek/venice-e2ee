@@ -77,6 +77,15 @@ export interface AciAttestationResult {
     /** True only when every check passed and the anchor is quote-bound. */
     verified: boolean;
     /**
+     * Whether the quote was shown to commit to a nonce this caller chose.
+     *
+     * False for a report obtained second-hand, where the nonce that produced it
+     * was never published — every other check still holds, but nothing rules out
+     * a report captured earlier and replayed. Callers must not treat the two as
+     * the same evidence.
+     */
+    nonceBound: boolean;
+    /**
      * The proven anchor, or null when any check failed. Never returned on a
      * partial pass: an anchor that is not quote-bound is not an improvement over
      * pinning, and returning one would invite treating it as though it were.
@@ -134,6 +143,22 @@ export declare function generateAciNonce(): string;
  * which link failed. `anchor` is null unless all of them passed.
  */
 export declare function verifyAciAttestation(report: AciAttestationReport, nonce: string, options?: VerifyAciAttestationOptions): Promise<AciAttestationResult>;
+/**
+ * Verify a report that arrived through somebody else.
+ *
+ * The gateway records the report it fetched from its own upstream, and serves it
+ * alongside the attested session. A relying party can check almost all of it:
+ * the quote against Intel's roots, the digests it commits to, the endorsement,
+ * the debug bit, and whether the channel the gateway bound is a key the upstream
+ * actually attested.
+ *
+ * What it cannot check is freshness. The nonce the gateway sent is not
+ * published, so the statement binding cannot be recomputed and a captured report
+ * cannot be told from a current one. That gap is what `nonceBound: false`
+ * records, and it is why this never returns an anchor: freshness rests on the
+ * attested gateway having behaved, bounded by the session's own expiry.
+ */
+export declare function verifyRelayedAciAttestation(report: AciAttestationReport, options?: VerifyAciAttestationOptions): Promise<AciAttestationResult>;
 /**
  * Fetch a report with a fresh nonce and verify it in one step.
  *

@@ -265,6 +265,7 @@ export {
   fetchAciAttestation,
   generateAciNonce,
   verifyAciAttestation,
+  verifyRelayedAciAttestation,
 } from './aci.js';
 export type {
   AciAttestationReport,
@@ -273,6 +274,20 @@ export type {
   AciKeysetEndorsement,
   VerifyAciAttestationOptions,
 } from './aci.js';
+export {
+  ACI_SESSIONS_PATH,
+  computeAttestedSessionId,
+  decodeSessionEvidence,
+  fetchAttestedSession,
+  verifyAttestedSession,
+} from './session.js';
+export type {
+  AciChannelBinding,
+  AciClaim,
+  AttestedSession,
+  AttestedSessionResult,
+  VerifyAttestedSessionOptions,
+} from './session.js';
 export type {
   Receipt,
   ReceiptEvent,

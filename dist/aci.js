@@ -100,6 +100,28 @@ export function generateAciNonce() {
  * which link failed. `anchor` is null unless all of them passed.
  */
 export async function verifyAciAttestation(report, nonce, options = {}) {
+    return runAciChecks(report, nonce, options);
+}
+/**
+ * Verify a report that arrived through somebody else.
+ *
+ * The gateway records the report it fetched from its own upstream, and serves it
+ * alongside the attested session. A relying party can check almost all of it:
+ * the quote against Intel's roots, the digests it commits to, the endorsement,
+ * the debug bit, and whether the channel the gateway bound is a key the upstream
+ * actually attested.
+ *
+ * What it cannot check is freshness. The nonce the gateway sent is not
+ * published, so the statement binding cannot be recomputed and a captured report
+ * cannot be told from a current one. That gap is what `nonceBound: false`
+ * records, and it is why this never returns an anchor: freshness rests on the
+ * attested gateway having behaved, bounded by the session's own expiry.
+ */
+export async function verifyRelayedAciAttestation(report, options = {}) {
+    const result = await runAciChecks(report, undefined, options);
+    return { ...result, anchor: null };
+}
+async function runAciChecks(report, nonce, options = {}) {
     const { dcapVerifier, requireDcap = true, expectedMeasurements, clockSkewSeconds = 60, now = () => Math.floor(Date.now() / 1000), } = options;
     const checks = [];
     const add = (name, ok, detail) => {
@@ -114,8 +136,10 @@ export async function verifyAciAttestation(report, nonce, options = {}) {
     const keysetDigest = report?.workload_keyset_digest;
     const staleAfter = attestation?.freshness?.stale_after ?? null;
     const sourceCommit = attestation?.source_provenance?.repo_commit ?? null;
+    let nonceBound = false;
     const fail = () => ({
         verified: false,
+        nonceBound,
         anchor: null,
         checks,
         measurements,
@@ -161,12 +185,15 @@ export async function verifyAciAttestation(report, nonce, options = {}) {
     add('quote_parsed', true);
     const debugMode = (tdAttributes[0] & 0x01) !== 0;
     add('debug_mode_disabled', !debugMode, debugMode ? 'TD is running in DEBUG mode — its measurements mean nothing' : undefined);
-    // The binding this module exists for.
-    const expectedReportData = aciReportData(workloadId, keysetDigest, nonce);
-    const boundToStatement = constantTimeEqual(reportData.slice(0, 32), expectedReportData);
-    add('report_data_binds_keyset_and_nonce', boundToStatement, boundToStatement
-        ? undefined
-        : `quote REPORTDATA starts ${toHex(reportData.slice(0, 32))}, statement hashes to ${toHex(expectedReportData)}`);
+    // The binding this module exists for. Skipped, never faked, when the nonce
+    // behind the report is not available.
+    if (nonce !== undefined) {
+        const expectedReportData = aciReportData(workloadId, keysetDigest, nonce);
+        nonceBound = constantTimeEqual(reportData.slice(0, 32), expectedReportData);
+        add('report_data_binds_keyset_and_nonce', nonceBound, nonceBound
+            ? undefined
+            : `quote REPORTDATA starts ${toHex(reportData.slice(0, 32))}, statement hashes to ${toHex(expectedReportData)}`);
+    }
     // The ACI profile fills only the first 32 bytes. A report with anything in
     // the tail is not the shape this verification reasons about.
     const tailClear = reportData.slice(32, 64).every((byte) => byte === 0);
@@ -239,7 +266,8 @@ export async function verifyAciAttestation(report, nonce, options = {}) {
     const verified = checks.every((check) => check.ok);
     return {
         verified,
-        anchor: verified ? { workloadId, workloadKeysetDigest: keysetDigest } : null,
+        nonceBound,
+        anchor: verified && nonceBound ? { workloadId, workloadKeysetDigest: keysetDigest } : null,
         checks,
         measurements,
         dcap,

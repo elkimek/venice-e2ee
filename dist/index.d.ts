@@ -21,8 +21,10 @@ export type { VeniceE2EEOptions, E2EESession, EncryptedPayload, DcapVerifier, Dc
 export type { AttestationResponse, AttestationResult, AttestationVerificationOptions, ServerVerification, } from './attestation.js';
 export { verifyAttestation, deriveEthAddress } from './attestation.js';
 export { verifyReceipt, receiptSigningBytes, recoverReceiptSigner, jcsStringify, sha256Prefixed, BODY_BINDING_CHECKS, hashReceiptBody, computeWorkloadId, computeWorkloadKeysetDigest, } from './receipt.js';
-export { ACI_ATTESTATION_PATH, ACI_KEYSET_ENDORSEMENT_PURPOSE, ACI_REPORT_DATA_PURPOSE, aciKeysetEndorsementPayload, aciReportData, aciReportDataStatement, establishAciTrustAnchor, fetchAciAttestation, generateAciNonce, verifyAciAttestation, } from './aci.js';
+export { ACI_ATTESTATION_PATH, ACI_KEYSET_ENDORSEMENT_PURPOSE, ACI_REPORT_DATA_PURPOSE, aciKeysetEndorsementPayload, aciReportData, aciReportDataStatement, establishAciTrustAnchor, fetchAciAttestation, generateAciNonce, verifyAciAttestation, verifyRelayedAciAttestation, } from './aci.js';
 export type { AciAttestationReport, AciAttestationResult, AciCheck, AciKeysetEndorsement, VerifyAciAttestationOptions, } from './aci.js';
+export { ACI_SESSIONS_PATH, computeAttestedSessionId, decodeSessionEvidence, fetchAttestedSession, verifyAttestedSession, } from './session.js';
+export type { AciChannelBinding, AciClaim, AttestedSession, AttestedSessionResult, VerifyAttestedSessionOptions, } from './session.js';
 export type { Receipt, ReceiptEvent, ReceiptCheck, ReceiptVerification, SignatureResponse, WorkloadKeyset, WorkloadIdentity, WorkloadPublicKey, KeysetKey, ReceiptTrustAnchor, ReceiptBody, ReceiptResponseHashField, VerifyReceiptOptions, } from './receipt.js';
 export { generateKeypair, deriveAESKey, encryptMessage, decryptChunk, toHex, fromHex, } from './crypto.js';
 export { decryptSSEStream } from './stream.js';

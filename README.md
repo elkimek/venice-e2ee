@@ -279,6 +279,43 @@ verify a report against a nonce it did not choose. DCAP verification is required
 an anchor lifted from an unverified quote is no better than a pinned one, and `anchor` stays
 null unless every check passes.
 
+### Checking the second hop yourself
+
+A receipt's `upstream.verified` event says what the gateway found when it checked the machine
+it forwarded to. The receipt signature covers that claim, but not the evidence behind it —
+which lives in an attested session, named by a `session_id` that is content-addressed over
+the verified material, `evidence_digest` included. So the id inside a signed receipt is a
+commitment to the whole record, and the public, unsigned session store becomes
+tamper-evident without needing a signature of its own.
+
+Fetched by id, a session also carries that evidence inline: the upstream's complete ACI
+report, quote and all.
+
+```js
+import { fetchAttestedSession, verifyAttestedSession } from 'venice-e2ee';
+
+const event = receipt.event_log.find((e) => e.type === 'upstream.verified');
+const session = await fetchAttestedSession('https://tee.redpill.ai', event.session_id);
+
+const result = await verifyAttestedSession(session, {
+  expectedSessionId: event.session_id,
+  expectedOrigin: event.url_origin,
+  dcapVerifier: createDcapVerifier(),
+});
+```
+
+That recomputes the session id, checks the evidence digest, DCAP-verifies the *upstream's*
+quote against Intel's roots (its checks appear under an `upstream.` prefix), and requires the
+TLS key the gateway bound the channel to appear in the upstream's attested keyset for the
+host it dialled. Without that last check a genuine report for some other machine would pass.
+
+One limit, reported rather than papered over. The nonce the gateway sent when it fetched that
+report is not published, so the statement binding cannot be recomputed and a captured report
+cannot be distinguished from a current one. `upstreamNonceBound` is therefore always false
+today, and no anchor is derived from a relayed report. Freshness of the second hop rests on
+the attested gateway having behaved, bounded by the session's own retention window — sessions
+expire, so a 404 on an old completion is expiry rather than missing evidence.
+
 For responses transformed after leaving the gateway, the bytes in hand may not reproduce
 the receipt's `cleartext_hash`. Select `wire_hash` only for the exact wire representation or
 `cleartext_hash` only when the gateway's pre-encryption serialization is available; never
