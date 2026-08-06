@@ -2,6 +2,22 @@
 
 This changelog summarizes user-visible changes to `venice-e2ee`. It also calls out the privacy and verification limits that matter when deciding whether to use a release.
 
+## Unreleased
+
+### A receipt trust anchor that is proven rather than pinned
+
+- Added `verifyAciAttestation()`, `establishAciTrustAnchor()`, and `fetchAciAttestation()` for the gateway's native ACI attestation report. Its TDX quote covers `sha256(JCS({purpose: "aci.report_data.v1", workload_id, workload_keyset_digest, nonce}))`, so a verified quote commits to the workload keyset digest. Callers who previously had to pin an anchor on first use can now derive one from Intel's root of trust.
+- This closes the gap the 0.3.0 notes described as unavoidable. Venice's `/api/v1/tee/attestation` serves the legacy report shape, whose `report_data` is `[address(20) | zeros(12) | nonce(32)]` and binds only the E2EE key and the nonce. The same enclave also answers `GET /v1/aci/attestation` on its own hostnames, unauthenticated, and that report carries the binding. Which host served it does not matter: the quote authenticates itself, and the digest it commits to is compared against the one Venice reports.
+- `anchor` is returned only when every check passes, and DCAP verification is required by default. An anchor taken from an unverified quote is no better than a pinned one, so the function refuses to hand one back.
+- Checks cover keyset-digest and workload-id recomputation, the `report_data` statement binding, an unused REPORTDATA tail, debug mode, the report's freshness window, an optional measurement allowlist, and the `keyset_endorsement` signature. Added `aciReportData()`, `aciReportDataStatement()`, and `aciKeysetEndorsementPayload()` for callers who want the canonical bytes directly.
+- The `keyset_endorsement` encoding is ECDSA-secp256k1 over `sha256(JCS({purpose: "aci.keyset.endorsement.v1", workload_keyset_digest}))` under the workload identity key. Previously undocumented here and left unverified; it now corroborates the anchor, though the `report_data` binding is what proves it.
+
+### The receipt signature that reaches the quote
+
+- `verifyReceipt()` now verifies the top-level `signature` when the gateway serves one, adding the `signed_text_matches_receipt_hashes` and `signature_recovers_to_attested_key` checks. It is EIP-191 `personal_sign` over `"<request_body_hash>:<response_body_hash>"`, made by the secp256k1 key whose Ethereum address the TDX quote carries in REPORTDATA.
+- This is the only binding in a receipt that reaches the quote without passing through the workload keyset, and it was previously only string-compared. The signed text is recomputed from the receipt's own hash events, so a valid signature over some other pair of hashes fails. Exported as `recoverReceiptSigner()`.
+- Both checks are skipped on gateways that serve neither field, so pre-ACI responses are unaffected.
+
 ## 0.4.1 — 2026-08-05
 
 ### Receipt body-binding diagnostics

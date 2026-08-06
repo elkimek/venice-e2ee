@@ -168,8 +168,14 @@ function decodeQuote(quote: string): Uint8Array {
   }
 }
 
-/** Parse a TDX quote and extract fields needed for verification. */
-function parseTdxQuote(quote: string) {
+/**
+ * Parse a TDX quote and extract fields needed for verification.
+ *
+ * Exported for the ACI report profile in `./aci.js`, which reads the same
+ * REPORTDATA and measurements out of the same quote layout but checks a
+ * different statement against them.
+ */
+export function parseTdxQuote(quote: string) {
   const bytes = decodeQuote(quote);
 
   if (bytes.length < MIN_QUOTE_LEN) {

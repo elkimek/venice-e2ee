@@ -23,7 +23,7 @@
  * should distinguish that from a receipt that failed for any other reason. See
  * {@link BODY_BINDING_CHECKS}.
  */
-import type { AttestationResponse } from './attestation.js';
+import { type AttestationResponse } from './attestation.js';
 export interface WorkloadPublicKey {
     algo: string;
     public_key: string;
@@ -131,6 +131,21 @@ export declare function computeWorkloadId(publicKey: WorkloadPublicKey): string;
 export declare function computeWorkloadKeysetDigest(keyset: WorkloadKeyset): string;
 /** The exact bytes the receipt signature covers: JCS minus `signature.value`. */
 export declare function receiptSigningBytes(receipt: Receipt): Uint8Array;
+/**
+ * Recover the signer of the `signature` field that rides alongside a receipt.
+ *
+ * This one is worth more than its placement in the response suggests. The
+ * receipt itself is signed by an Ed25519 key from the workload keyset, which is
+ * only as trustworthy as the anchor that keyset was established under. The
+ * top-level signature is made by the secp256k1 key whose Ethereum address the
+ * TDX quote carries in REPORTDATA — so it is verifiable against the quote
+ * directly, with no keyset and no pinning in the path.
+ *
+ * The encoding is EIP-191 `personal_sign` over the `text` field: keccak256 of
+ * `"\x19Ethereum Signed Message:\n" || len(text) || text`, signed with a
+ * 65-byte recoverable signature.
+ */
+export declare function recoverReceiptSigner(text: string, signatureHex: string): string;
 /**
  * Verify a receipt against an independently established workload trust anchor.
  *

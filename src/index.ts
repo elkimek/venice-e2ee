@@ -246,6 +246,7 @@ export { verifyAttestation, deriveEthAddress } from './attestation.js';
 export {
   verifyReceipt,
   receiptSigningBytes,
+  recoverReceiptSigner,
   jcsStringify,
   sha256Prefixed,
   BODY_BINDING_CHECKS,
@@ -253,6 +254,25 @@ export {
   computeWorkloadId,
   computeWorkloadKeysetDigest,
 } from './receipt.js';
+export {
+  ACI_ATTESTATION_PATH,
+  ACI_KEYSET_ENDORSEMENT_PURPOSE,
+  ACI_REPORT_DATA_PURPOSE,
+  aciKeysetEndorsementPayload,
+  aciReportData,
+  aciReportDataStatement,
+  establishAciTrustAnchor,
+  fetchAciAttestation,
+  generateAciNonce,
+  verifyAciAttestation,
+} from './aci.js';
+export type {
+  AciAttestationReport,
+  AciAttestationResult,
+  AciCheck,
+  AciKeysetEndorsement,
+  VerifyAciAttestationOptions,
+} from './aci.js';
 export type {
   Receipt,
   ReceiptEvent,

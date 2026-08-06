@@ -65,8 +65,14 @@ function decodeQuote(quote) {
         throw new Error('TDX quote is neither valid hex nor base64');
     }
 }
-/** Parse a TDX quote and extract fields needed for verification. */
-function parseTdxQuote(quote) {
+/**
+ * Parse a TDX quote and extract fields needed for verification.
+ *
+ * Exported for the ACI report profile in `./aci.js`, which reads the same
+ * REPORTDATA and measurements out of the same quote layout but checks a
+ * different statement against them.
+ */
+export function parseTdxQuote(quote) {
     const bytes = decodeQuote(quote);
     if (bytes.length < MIN_QUOTE_LEN) {
         throw new Error(`TDX quote too short: ${bytes.length} bytes (need >= ${MIN_QUOTE_LEN})`);
