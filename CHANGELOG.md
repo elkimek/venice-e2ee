@@ -2,6 +2,14 @@
 
 This changelog summarizes user-visible changes to `venice-e2ee`. It also calls out the privacy and verification limits that matter when deciding whether to use a release.
 
+## 0.5.1 — 2026-08-07
+
+### DCAP QVL 0.6 compatibility
+
+- Added explicit support for `@phala/dcap-qvl` 0.6.x while retaining compatibility with the established 0.3.x integration.
+- Added CI coverage for both the optional-peer error path and a real 0.6.1 module load and verifier invocation.
+- Kept Phala DCAP optional and outside the default lockfile. Its current `elliptic` dependency still carries the signing-related advisory described below, while Venice E2EE uses the package only for verification.
+
 ## 0.5.0 — 2026-08-07
 
 ### A receipt trust anchor that is proven rather than pinned

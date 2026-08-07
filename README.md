@@ -118,7 +118,7 @@ const e2ee = createVeniceE2EE({ apiKey, verifyAttestation: false });
 For full TDX DCAP verification (PCK cert chain, quote signatures, TCB evaluation), install the optional peer dependency and inject the verifier:
 
 ```bash
-npm install @phala/dcap-qvl
+npm install @phala/dcap-qvl@^0.6.1
 ```
 
 > **Upstream dependency note:** Current `@phala/dcap-qvl` releases depend on `elliptic`, which has an open advisory affecting ECDSA signing. This adapter uses Phala only for signature verification and never gives it a signing private key, so that key-exposure mechanism is not exercised here. If your policy rejects every dependency with an open advisory regardless of reachability, leave the optional DCAP adapter disabled until Phala changes its dependency tree.
