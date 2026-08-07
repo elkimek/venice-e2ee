@@ -238,9 +238,88 @@ malformed signatures all fail closed.
 > **Trust-anchor requirement:** Venice's `/api/v1/tee/attestation` compatibility quote
 > binds its E2EE key and nonce, not the ACI `workload_keyset_digest`. Its self-described
 > `workload_id` and `workload_keyset_digest` therefore cannot establish this trust anchor.
-> Pin values obtained from a separately verified canonical ACI attestation path. If no such
-> path or pin is available, receipt verification must remain unavailable rather than treating
-> two provider-controlled values as proof.
+> Use `establishAciTrustAnchor()` below, or pin values obtained out of band. Never treat two
+> provider-controlled values from the response being checked as proof.
+
+### Establishing the anchor from the quote
+
+The gateway also speaks the native ACI protocol, and there the quote says more than Venice's
+compatibility endpoint lets on. Its `report_data` is
+
+```text
+sha256(JCS({purpose: "aci.report_data.v1", workload_id, workload_keyset_digest, nonce}))
+```
+
+so a DCAP-verified quote commits to the keyset digest directly. That turns the anchor from
+something you pin into something you check:
+
+```js
+import { establishAciTrustAnchor } from 'venice-e2ee';
+import { createDcapVerifier } from 'venice-e2ee/dcap';
+
+const aci = await establishAciTrustAnchor('https://tee.redpill.ai', {
+  dcapVerifier: createDcapVerifier(),
+});
+
+if (!aci.anchor) throw new Error(JSON.stringify(aci.checks));
+
+// Venice must be serving the keyset the quote covers.
+if (attestation.workload_keyset_digest !== aci.anchor.workloadKeysetDigest) {
+  throw new Error('Venice reports a keyset the attested enclave did not commit to');
+}
+```
+
+The endpoint is unauthenticated and lives on the gateway's own hostnames rather than behind
+`api.venice.ai`. Reaching it over a different path is not a weakness: the quote authenticates
+itself against Intel's roots, and the digest it binds is compared against the one Venice
+reports. If those agree, the keyset Venice serves is the keyset the quote covers.
+
+The nonce is generated inside `establishAciTrustAnchor()` so a caller cannot accidentally
+verify a report against a nonce it did not choose. DCAP verification is required by default:
+an anchor lifted from an unverified quote is no better than a pinned one, and `anchor` stays
+null unless every check passes.
+
+### Inspecting the second-hop evidence
+
+A receipt's `upstream.verified` event says what the gateway found when it checked the machine
+it forwarded to. The receipt signature covers that claim, but not the evidence behind it —
+which lives in an attested session, named by a `session_id` that is content-addressed over
+the verified material, `evidence_digest` included. So the id inside a signed receipt is a
+commitment to the whole record, and the public, unsigned session store becomes
+tamper-evident without needing a signature of its own.
+
+Fetched by id, a session also carries that evidence inline: the upstream's complete ACI
+report, quote and all.
+
+```js
+import { fetchAttestedSession, verifyAttestedSession } from 'venice-e2ee';
+
+const event = receipt.event_log.find((e) => e.type === 'upstream.verified');
+const session = await fetchAttestedSession('https://tee.redpill.ai', event.session_id);
+
+const result = await verifyAttestedSession(session, {
+  expectedSessionId: event.session_id,
+  expectedOrigin: event.url_origin,
+  dcapVerifier: createDcapVerifier(),
+});
+```
+
+That recomputes the session id, checks the evidence digest, and DCAP-validates the *upstream's*
+quote against Intel's roots; those checks appear under an `upstream.` prefix. It authenticates
+the quote and proves that the public evidence is what the receipt committed to.
+
+It does **not** independently verify the second hop today. The nonce the gateway used to fetch
+the report is not published, so the verifier cannot recompute the REPORTDATA statement that
+binds `workload_id` and `workload_keyset_digest` to the quote. Matching the served
+`report_data` to REPORTDATA would only compare two copies of opaque bytes. Consequently
+`result.verified` and `upstreamNonceBound` are false, no anchor is returned, and a TLS key in
+the reported keyset is not described as attested.
+
+Publishing the gateway's original nonce in the content-addressed evidence would make the
+quote-to-keyset binding checkable. It still would not make that nonce caller-chosen or prove
+freshness independently; freshness would continue to rest on the attested gateway's behavior
+and the session retention window. A 404 on an old completion can therefore mean expiry rather
+than missing evidence.
 
 For responses transformed after leaving the gateway, the bytes in hand may not reproduce
 the receipt's `cleartext_hash`. Select `wire_hash` only for the exact wire representation or
@@ -260,9 +339,10 @@ Venice demonstrably re-wraps responses (it adds `cost` and `venice_parameters`),
 request-side hashes behave the same way. Only something sitting directly in front of the ACI
 gateway can reproduce these.
 
-The other eleven checks pass, so what a receipt establishes from this vantage point is that
+Every other check passes, so what a receipt establishes from this vantage point is that
 **the attested enclave signed a receipt for this completion id** under a keyset matching the
-trust anchor — not that the bytes in hand are the ones it produced.
+trust anchor, and separately **vouched for a pair of body hashes with its quote-bound key** —
+not that the bytes in hand are the ones it produced.
 
 Callers reporting this to a human should separate the two cases. Treating an unreachable
 binding as a failed verification produces an alarm on every completion, which trains people
@@ -446,7 +526,7 @@ stays ciphertext.
 - TDX quote signature chain (available via optional DCAP verifier)
 - NVIDIA GPU attestation (available via optional GPU verifier; NVIDIA's verdict, not an independent quote check, and not bound to the TDX quote)
 - TEE code measurements
-- Response receipts unless the caller supplies an independently established workload/keyset trust anchor and exact request/response bytes
+- Response receipts unless the caller supplies a workload/keyset trust anchor (see `establishAciTrustAnchor()`) and exact request/response bytes
 
 **Visible metadata:** The library encrypts message `content`, not the surrounding HTTP request. Venice can observe authentication, model selection, roles, token and streaming settings, request structure, timing, sizes, billing information, and network metadata.
 

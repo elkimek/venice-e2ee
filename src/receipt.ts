@@ -25,8 +25,10 @@
  */
 
 import { sha256 } from '@noble/hashes/sha2.js';
+import { keccak_256 } from '@noble/hashes/sha3.js';
+import { Signature } from '@noble/secp256k1';
 import { toHex } from './crypto.js';
-import type { AttestationResponse } from './attestation.js';
+import { deriveEthAddress, type AttestationResponse } from './attestation.js';
 
 export interface WorkloadPublicKey {
   algo: string;
@@ -230,6 +232,62 @@ async function verifyEd25519(
     signature as BufferSource,
     message as BufferSource
   );
+}
+
+/**
+ * Recover the signer of the `signature` field that rides alongside a receipt.
+ *
+ * This one is worth more than its placement in the response suggests. The
+ * receipt itself is signed by an Ed25519 key from the workload keyset, which is
+ * only as trustworthy as the anchor that keyset was established under. The
+ * top-level signature is made by the secp256k1 key whose Ethereum address the
+ * TDX quote carries in REPORTDATA — so it is verifiable against the quote
+ * directly, with no keyset and no pinning in the path.
+ *
+ * The encoding is EIP-191 `personal_sign` over the `text` field: keccak256 of
+ * `"\x19Ethereum Signed Message:\n" || len(text) || text`, signed with a
+ * 65-byte recoverable signature.
+ */
+export function recoverReceiptSigner(text: string, signatureHex: string): string {
+  const clean = signatureHex.startsWith('0x') ? signatureHex.slice(2) : signatureHex;
+  if (clean.length !== 130 || !/^[0-9a-f]+$/i.test(clean)) {
+    throw new TypeError('Receipt signature must be 65 recoverable bytes of hex');
+  }
+  let recovery = Number.parseInt(clean.slice(128, 130), 16);
+  if (recovery >= 27 && recovery <= 30) recovery -= 27;
+  if (recovery !== 0 && recovery !== 1) {
+    throw new TypeError(`Unsupported recovery id ${clean.slice(128, 130)}`);
+  }
+
+  const message = new TextEncoder().encode(text);
+  const prefix = new TextEncoder().encode(`\x19Ethereum Signed Message:\n${message.length}`);
+  const digest = keccak_256(new Uint8Array([...prefix, ...message]));
+
+  const signature = new Signature(
+    BigInt(`0x${clean.slice(0, 64)}`),
+    BigInt(`0x${clean.slice(64, 128)}`),
+    recovery
+  );
+  const publicKey = signature.recoverPublicKey(digest).toRawBytes(false);
+  return `0x${toHex(deriveEthAddress(toHex(publicKey)))}`;
+}
+
+/**
+ * The text the top-level signature covers: the receipt's own request and
+ * response hashes, `sha256:` prefixes stripped, joined by a colon.
+ *
+ * Recomputing it is what makes the signature about *this* receipt rather than
+ * about two hashes the server chose freely.
+ */
+function signedTextForReceipt(
+  receipt: Receipt,
+  responseHashField: ReceiptResponseHashField
+): string | null {
+  const request = exactlyOneEvent(receipt, 'request.received')?.body_hash;
+  const response = exactlyOneEvent(receipt, 'response.returned')?.[responseHashField];
+  if (typeof request !== 'string' || typeof response !== 'string') return null;
+  const strip = (hash: string): string => hash.replace(/^sha256:/, '');
+  return `${strip(request)}:${strip(response)}`;
 }
 
 function exactlyOneEvent(receipt: Receipt, type: string): ReceiptEvent | undefined {
@@ -460,6 +518,59 @@ export async function verifyReceipt(
         ? undefined
         : `${signatureAddress ?? 'missing'} vs attestation ${attestationAddress ?? 'missing'}`
     );
+  }
+
+  // The one binding in a receipt that reaches the quote without passing through
+  // the keyset. Checked only when the gateway serves it, since pre-ACI
+  // responses carry neither field.
+  const signedText = signatureResponse.text;
+  const topLevelSignature = signatureResponse.signature;
+  if (signedText !== undefined || topLevelSignature !== undefined) {
+    const complete = typeof signedText === 'string' && typeof topLevelSignature === 'string';
+    add(
+      'top_level_signature_complete',
+      complete,
+      complete ? undefined : 'top-level receipt signature requires both text and signature strings'
+    );
+    if (!complete) {
+      return { verified: false, checks };
+    }
+
+    const expectedText = signedTextForReceipt(receipt, responseHashField);
+    add(
+      'signed_text_matches_receipt_hashes',
+      expectedText !== null && expectedText === signedText,
+      expectedText === null
+        ? 'receipt has no unambiguous request/response hash pair to compare'
+        : expectedText === signedText
+          ? undefined
+          : `signature covers "${signedText}", receipt hashes give "${expectedText}"`
+    );
+
+    if (!attestationAddress) {
+      add(
+        'signature_recovers_to_attested_key',
+        false,
+        'attestation carried no signing address to compare with the recovered signer'
+      );
+    } else {
+      try {
+        const recovered = recoverReceiptSigner(signedText, topLevelSignature).toLowerCase();
+        add(
+          'signature_recovers_to_attested_key',
+          recovered === attestationAddress,
+          recovered === attestationAddress
+            ? undefined
+            : `recovered ${recovered}, attestation binds ${attestationAddress}`
+        );
+      } catch (error: unknown) {
+        add(
+          'signature_recovers_to_attested_key',
+          false,
+          error instanceof Error ? error.message : String(error)
+        );
+      }
+    }
   }
 
   return { verified: checks.length > 0 && checks.every((check) => check.ok), checks };

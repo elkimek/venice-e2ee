@@ -1,4 +1,6 @@
 import { beforeAll, describe, expect, it } from 'vitest';
+import { getPublicKey, signAsync, utils } from '@noble/secp256k1';
+import { keccak_256 } from '@noble/hashes/sha3.js';
 import {
   BODY_BINDING_CHECKS,
   computeWorkloadId,
@@ -6,9 +8,11 @@ import {
   hashReceiptBody,
   jcsStringify,
   receiptSigningBytes,
+  recoverReceiptSigner,
   sha256Prefixed,
   verifyReceipt,
 } from './receipt.js';
+import { deriveEthAddress } from './attestation.js';
 import type {
   Receipt,
   ReceiptTrustAnchor,
@@ -428,6 +432,145 @@ describe('verifyReceipt', () => {
     expect(noKeyset.checks).toContainEqual(
       expect.objectContaining({ name: 'keyset_present', ok: false })
     );
+  });
+
+  // ── The one binding that reaches the quote without the keyset ──────
+  //
+  // The receipt body is signed by an Ed25519 key out of the workload keyset,
+  // which is only as good as the anchor that keyset came under. The top-level
+  // signature is made by the secp256k1 key whose address the TDX quote carries
+  // in REPORTDATA, so it is checkable against the quote directly.
+  describe('top-level signature', () => {
+    const privateKey = utils.randomPrivateKey();
+    const address = `0x${toHex(deriveEthAddress(toHex(getPublicKey(privateKey, false))))}`;
+    const strip = (hash: string): string => hash.replace(/^sha256:/, '');
+    const signedText = `${strip(hashReceiptBody(REQUEST_BODY))}:${strip(hashReceiptBody(RESPONSE_BODY))}`;
+
+    async function personalSign(text: string, key: Uint8Array): Promise<string> {
+      const message = enc.encode(text);
+      const prefix = enc.encode(`\x19Ethereum Signed Message:\n${message.length}`);
+      const signature = await signAsync(keccak_256(new Uint8Array([...prefix, ...message])), key);
+      return `0x${signature.toCompactHex()}${signature.recovery.toString(16).padStart(2, '0')}`;
+    }
+
+    async function signedFixture(overrides: { text?: string; key?: Uint8Array } = {}) {
+      const text = overrides.text ?? signedText;
+      return build({
+        attestation: { signing_address: address },
+        signatureResponse: {
+          signing_address: address,
+          text,
+          signature: await personalSign(text, overrides.key ?? privateKey),
+        },
+      });
+    }
+
+    it('recovers the signer of a known EIP-191 signature', async () => {
+      const signature = await personalSign('hello', privateKey);
+      expect(recoverReceiptSigner('hello', signature).toLowerCase()).toBe(address.toLowerCase());
+    });
+
+    it('rejects a signature that is not 65 recoverable bytes', () => {
+      expect(() => recoverReceiptSigner('hello', '0xdeadbeef')).toThrow('65 recoverable bytes');
+    });
+
+    it('accepts a receipt whose hashes the attested key signed', async () => {
+      const fixture = await signedFixture();
+      const result = await verifyReceipt(
+        fixture.signatureResponse,
+        fixture.attestation,
+        options(fixture)
+      );
+      expect(result.checks).toContainEqual(
+        expect.objectContaining({ name: 'signature_recovers_to_attested_key', ok: true })
+      );
+      expect(result.checks).toContainEqual(
+        expect.objectContaining({ name: 'signed_text_matches_receipt_hashes', ok: true })
+      );
+      expect(result.verified).toBe(true);
+    });
+
+    it('refuses a signature made by a key the quote does not bind', async () => {
+      const fixture = await signedFixture({ key: utils.randomPrivateKey() });
+      const result = await verifyReceipt(
+        fixture.signatureResponse,
+        fixture.attestation,
+        options(fixture)
+      );
+      expect(result.verified).toBe(false);
+      expect(result.checks).toContainEqual(
+        expect.objectContaining({ name: 'signature_recovers_to_attested_key', ok: false })
+      );
+    });
+
+    it('refuses a validly signed statement about some other pair of hashes', async () => {
+      // The signature verifies; it just does not describe this receipt.
+      const fixture = await signedFixture({ text: `${'11'.repeat(32)}:${'22'.repeat(32)}` });
+      const result = await verifyReceipt(
+        fixture.signatureResponse,
+        fixture.attestation,
+        options(fixture)
+      );
+      expect(result.verified).toBe(false);
+      expect(result.checks).toContainEqual(
+        expect.objectContaining({ name: 'signed_text_matches_receipt_hashes', ok: false })
+      );
+    });
+
+    it('refuses a partial top-level signature instead of silently skipping it', async () => {
+      const textOnly = await build({ signatureResponse: { text: signedText } });
+      const textOnlyResult = await verifyReceipt(
+        textOnly.signatureResponse,
+        textOnly.attestation,
+        options(textOnly)
+      );
+      expect(textOnlyResult.verified).toBe(false);
+      expect(textOnlyResult.checks).toContainEqual(
+        expect.objectContaining({ name: 'top_level_signature_complete', ok: false })
+      );
+
+      const signatureOnly = await build({
+        signatureResponse: { signature: await personalSign(signedText, privateKey) },
+      });
+      const signatureOnlyResult = await verifyReceipt(
+        signatureOnly.signatureResponse,
+        signatureOnly.attestation,
+        options(signatureOnly)
+      );
+      expect(signatureOnlyResult.verified).toBe(false);
+      expect(signatureOnlyResult.checks).toContainEqual(
+        expect.objectContaining({ name: 'top_level_signature_complete', ok: false })
+      );
+    });
+
+    it('refuses a top-level signature when no attested signing address is available', async () => {
+      const fixture = await signedFixture();
+      delete fixture.attestation.signing_address;
+      delete fixture.signatureResponse.signing_address;
+
+      const result = await verifyReceipt(
+        fixture.signatureResponse,
+        fixture.attestation,
+        options(fixture)
+      );
+
+      expect(result.verified).toBe(false);
+      expect(result.checks).toContainEqual(
+        expect.objectContaining({ name: 'signature_recovers_to_attested_key', ok: false })
+      );
+    });
+
+    it('stays silent on gateways that serve neither field', async () => {
+      const fixture = await build();
+      const result = await verifyReceipt(
+        fixture.signatureResponse,
+        fixture.attestation,
+        options(fixture)
+      );
+      const names = result.checks.map((check) => check.name);
+      expect(names).not.toContain('signature_recovers_to_attested_key');
+      expect(names).not.toContain('signed_text_matches_receipt_hashes');
+    });
   });
 });
 

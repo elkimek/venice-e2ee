@@ -90,6 +90,19 @@ export interface AttestationVerificationOptions {
  */
 export declare function deriveEthAddress(pubKeyHex: string): Uint8Array;
 /**
+ * Parse a TDX quote and extract fields needed for verification.
+ *
+ * Exported for the ACI report profile in `./aci.js`, which reads the same
+ * REPORTDATA and measurements out of the same quote layout but checks a
+ * different statement against them.
+ */
+export declare function parseTdxQuote(quote: string): {
+    bytes: Uint8Array<ArrayBufferLike>;
+    tdAttributes: Uint8Array<ArrayBuffer>;
+    reportData: Uint8Array<ArrayBuffer>;
+    measurements: TdxMeasurements;
+};
+/**
  * Verify a Venice TEE attestation response.
  *
  * Always runs v1 binding checks:

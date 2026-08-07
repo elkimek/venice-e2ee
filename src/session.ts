@@ -1,0 +1,372 @@
+/**
+ * Attested sessions — checking the gateway's verdict on the machine it forwarded to.
+ *
+ * A receipt's `upstream.verified` event says what the gateway found when it
+ * looked at its upstream, and the receipt signature covers that. What the event
+ * does not carry is the evidence behind the verdict: that lives in an attested
+ * session record, named by `session_id`.
+ *
+ * The name is the point. A session id is content-addressed over the verified
+ * material:
+ *
+ * ```text
+ * "as_" + hex(sha256(JCS({upstream_name, endpoint, verifier_id, identity,
+ *                         channel_binding, claims, evidence_digest})))
+ * ```
+ *
+ * so the id inside a signed receipt is a commitment to the whole record,
+ * including a digest of the upstream's own attestation report. The session store
+ * is served publicly and unsigned, and it does not need to be signed: recomputing
+ * the id is what makes a record tamper-evident, and the receipt is what makes the
+ * id trustworthy.
+ *
+ * Fetched by id, a session also carries the evidence inline as a `data:` URI —
+ * the upstream's complete ACI attestation report, quote included. A relying
+ * party can authenticate the quote with DCAP, inspect its measurements, and
+ * check that the public record is the one the receipt committed to.
+ *
+ * A critical binding stays out of reach. The nonce the gateway sent when it
+ * fetched that report is not published, so the REPORTDATA statement cannot be
+ * recomputed. The relying party therefore cannot prove that the reported keyset
+ * — including its TLS keys — belongs to the DCAP-valid quote, or distinguish a
+ * captured report from a current one. Verification remains false until that
+ * nonce is available. {@link AttestedSessionResult.upstreamNonceBound} records
+ * the missing caller-freshness property separately.
+ */
+
+import { sha256 } from '@noble/hashes/sha2.js';
+import { toHex } from './crypto.js';
+import { jcsStringify } from './receipt.js';
+import {
+  verifyRelayedAciAttestation,
+  type AciAttestationReport,
+  type AciAttestationResult,
+  type AciCheck,
+  type VerifyAciAttestationOptions,
+} from './aci.js';
+
+/** Path of the unauthenticated attested-session store. */
+export const ACI_SESSIONS_PATH = '/v1/aci/sessions';
+
+export interface AciChannelBinding {
+  type: string;
+  origin?: string;
+  spki_sha256?: string;
+  [key: string]: unknown;
+}
+
+export interface AciClaim {
+  status: 'asserted' | 'refuted' | 'unknown';
+  source?: string;
+  reason?: string;
+}
+
+export interface AttestedSession {
+  api_version?: string;
+  session_id: string;
+  upstream_name: string;
+  endpoint?: string;
+  verifier_id: string;
+  established_at?: number;
+  expires_at?: number;
+  identity?: Record<string, unknown>;
+  channel_binding: AciChannelBinding[];
+  claims: Record<string, AciClaim>;
+  evidence?: { digest?: string; data?: string; [key: string]: unknown };
+}
+
+export interface AttestedSessionResult {
+  /** True only when every required binding passed. Relayed reports currently fail closed. */
+  verified: boolean;
+  checks: AciCheck[];
+  /**
+   * Checks performed on the upstream's attestation report, when the session
+   * carried it. This result remains unverified while the report nonce is absent.
+   * Null when no evidence was served or it could not be decoded.
+   */
+  upstream: AciAttestationResult | null;
+  /**
+   * Always false today: the nonce behind the upstream report is not published,
+   * so the second hop's freshness is not established by this check.
+   */
+  upstreamNonceBound: boolean;
+  /** Claims the gateway could not establish about the upstream. */
+  unknownClaims: string[];
+}
+
+export interface VerifyAttestedSessionOptions {
+  /** The `session_id` the signed receipt named. Required — it is the whole binding. */
+  expectedSessionId: string;
+  /** The `url_origin` the receipt named, checked against the session's endpoint. */
+  expectedOrigin?: string;
+  /** Verify the upstream report's quote. Omitted means the report is not checked. */
+  dcapVerifier?: VerifyAciAttestationOptions['dcapVerifier'];
+  /** Skip verifying the inline evidence even when it is present. */
+  skipEvidence?: boolean;
+  clockSkewSeconds?: number;
+  now?: () => number;
+}
+
+/**
+ * Recompute a session's content-addressed id.
+ *
+ * Timestamps are excluded so identical material dedups to one session; every
+ * field named here feeds the hash, so adding or dropping one changes every id.
+ */
+export function computeAttestedSessionId(session: AttestedSession): string {
+  const material = {
+    upstream_name: session.upstream_name,
+    endpoint: session.endpoint ?? null,
+    verifier_id: session.verifier_id,
+    identity: (session.identity ?? null) as never,
+    channel_binding: session.channel_binding as never,
+    claims: session.claims as never,
+    evidence_digest: session.evidence?.digest ?? null,
+  };
+  return `as_${toHex(sha256(new TextEncoder().encode(jcsStringify(material as never))))}`;
+}
+
+/** Fetch one attested session by id. Public endpoint; no credentials are sent. */
+export async function fetchAttestedSession(
+  baseUrl: string,
+  sessionId: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<AttestedSession> {
+  const url = `${baseUrl.replace(/\/+$/, '')}${ACI_SESSIONS_PATH}/${encodeURIComponent(sessionId)}`;
+  const res = await fetchImpl(url);
+  if (!res.ok) {
+    // Sessions are retained only as long as the receipts citing them, so a 404
+    // on an old completion is expiry rather than absence of evidence.
+    throw new Error(
+      res.status === 404
+        ? `attested session ${sessionId} is not in the store (expired, or never existed)`
+        : `attested session fetch failed (${res.status}) from ${baseUrl}`
+    );
+  }
+  return (await res.json()) as AttestedSession;
+}
+
+/** The upstream report carried in a session's `evidence.data` URI, with its raw bytes. */
+export function decodeSessionEvidence(
+  session: AttestedSession
+): { bytes: Uint8Array; report: AciAttestationReport } | null {
+  const data = session.evidence?.data;
+  if (typeof data !== 'string') return null;
+  const comma = data.indexOf(',');
+  if (!data.startsWith('data:') || comma < 0) {
+    throw new TypeError('session evidence is not a valid data URI');
+  }
+  const metadata = data.slice('data:'.length, comma).toLowerCase().split(';');
+  if (!metadata.includes('base64')) {
+    throw new TypeError('session evidence data URI must use base64 encoding');
+  }
+  const payload = data.slice(comma + 1);
+  const normalized = payload.replace(/-/g, '+').replace(/_/g, '/');
+  if (!/^[a-z0-9+/]*={0,2}$/i.test(normalized) || normalized.length % 4 === 1) {
+    throw new TypeError('session evidence contains invalid base64');
+  }
+  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
+  let binary: string;
+  try {
+    binary = atob(padded);
+  } catch {
+    throw new TypeError('session evidence contains invalid base64');
+  }
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  let report: unknown;
+  try {
+    report = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+  } catch {
+    throw new TypeError('session evidence is not valid UTF-8 JSON');
+  }
+  if (!report || typeof report !== 'object' || Array.isArray(report)) {
+    throw new TypeError('session evidence JSON must contain an object');
+  }
+  return { bytes, report: report as AciAttestationReport };
+}
+
+/** Host of a URL, or null when it will not parse. */
+function originHost(value: string | undefined): string | null {
+  if (!value) return null;
+  try {
+    return new URL(value).host.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Verify an attested session against the id a signed receipt named.
+ *
+ * Reports every check rather than throwing. When the session carries the
+ * upstream's report and a `dcapVerifier` is supplied, the quote and report are
+ * checked and their results are folded in under an `upstream.` prefix. The
+ * overall result remains false while the nonce required to bind the reported
+ * keyset to REPORTDATA is unavailable.
+ */
+export async function verifyAttestedSession(
+  session: AttestedSession,
+  options: VerifyAttestedSessionOptions
+): Promise<AttestedSessionResult> {
+  const checks: AciCheck[] = [];
+  const add = (name: string, ok: boolean, detail?: string): void => {
+    checks.push(detail === undefined ? { name, ok } : { name, ok, detail });
+  };
+  const unknownClaims = Object.entries(session?.claims ?? {})
+    .filter(([, claim]) => claim?.status === 'unknown')
+    .map(([name]) => name);
+
+  const done = (upstream: AciAttestationResult | null): AttestedSessionResult => ({
+    verified: checks.every((check) => check.ok),
+    checks,
+    upstream,
+    upstreamNonceBound: upstream?.nonceBound ?? false,
+    unknownClaims,
+  });
+
+  if (!session || typeof session.session_id !== 'string' || !Array.isArray(session.channel_binding)) {
+    add('session_well_formed', false, 'session record is missing session_id or channel_binding');
+    return done(null);
+  }
+  add('session_well_formed', true);
+
+  let recomputed: string;
+  try {
+    recomputed = computeAttestedSessionId(session);
+  } catch (error: unknown) {
+    add(
+      'session_id_recomputes',
+      false,
+      `could not canonicalize session: ${error instanceof Error ? error.message : String(error)}`
+    );
+    return done(null);
+  }
+  add(
+    'session_id_recomputes',
+    recomputed === session.session_id,
+    recomputed === session.session_id
+      ? undefined
+      : `computed ${recomputed}, record says ${session.session_id}`
+  );
+  add(
+    'session_id_matches_receipt',
+    session.session_id === options.expectedSessionId,
+    session.session_id === options.expectedSessionId
+      ? undefined
+      : `record is ${session.session_id}, receipt named ${options.expectedSessionId}`
+  );
+
+  if (options.expectedOrigin) {
+    const matches = originHost(session.endpoint) === originHost(options.expectedOrigin);
+    add(
+      'endpoint_matches_receipt_origin',
+      matches,
+      matches
+        ? undefined
+        : `session endpoint ${session.endpoint ?? 'missing'}, receipt named ${options.expectedOrigin}`
+    );
+  }
+
+  const now = options.now ?? (() => Math.floor(Date.now() / 1000));
+  if (typeof session.expires_at === 'number') {
+    // A retention deadline rather than a binding-validity one, so this is
+    // reported for context rather than treated as invalidating.
+    const live = now() <= session.expires_at + (options.clockSkewSeconds ?? 60);
+    add('session_within_retention', live, live ? undefined : 'session record is past its retention deadline');
+  }
+
+  if (options.skipEvidence) return done(null);
+
+  if (typeof session.evidence?.data !== 'string') {
+    // The list endpoint serves digests only; fetch by id to get the report.
+    add(
+      'evidence_present',
+      false,
+      'session carries no inline evidence — fetch it by id rather than from the list'
+    );
+    return done(null);
+  }
+  add('evidence_present', true);
+
+  let evidence: NonNullable<ReturnType<typeof decodeSessionEvidence>>;
+  try {
+    evidence = decodeSessionEvidence(session)!;
+    add('evidence_decodes', true);
+  } catch (error: unknown) {
+    add(
+      'evidence_decodes',
+      false,
+      error instanceof Error ? error.message : String(error)
+    );
+    return done(null);
+  }
+
+  const digest = `sha256:${toHex(sha256(evidence.bytes))}`;
+  const digestOk = digest === session.evidence?.digest;
+  add(
+    'evidence_digest_matches',
+    digestOk,
+    digestOk ? undefined : `computed ${digest}, session says ${session.evidence?.digest ?? 'missing'}`
+  );
+
+  if (!options.dcapVerifier) {
+    // The report is here but nothing was verified about it. Saying so beats
+    // returning a pass that looks like the second hop was checked.
+    add('upstream_report_verified', false, 'no dcapVerifier supplied — the upstream quote was not checked');
+    return done(null);
+  }
+
+  const upstream = await verifyRelayedAciAttestation(evidence.report, {
+    dcapVerifier: options.dcapVerifier,
+    clockSkewSeconds: options.clockSkewSeconds,
+    now: options.now,
+  });
+  for (const check of upstream.checks) {
+    checks.push({ ...check, name: `upstream.${check.name}` });
+  }
+
+  // The keyset must first be bound to REPORTDATA. Without the nonce used for a
+  // relayed report, an internally consistent keyset can still be unrelated to
+  // the DCAP-valid quote, so matching a TLS key inside it proves nothing.
+  const keysetQuoteBound = upstream.checks.some(
+    (check) => check.name === 'report_data_binds_keyset_and_nonce' && check.ok
+  );
+  if (!keysetQuoteBound) {
+    add(
+      'channel_binding_in_attested_keyset',
+      false,
+      'upstream keyset is not quote-bound because the report nonce was not published'
+    );
+    return done(upstream);
+  }
+
+  // The check that ties the channel the gateway used to the workload it
+  // verified. Without it, a valid report for some other machine would pass.
+  const tlsKeys = (evidence.report.attestation?.workload_keyset as
+    | { tls_public_keys?: Array<{ domain?: string; spki_sha256?: string }> }
+    | undefined)?.tls_public_keys;
+  const bindings = session.channel_binding.filter((b) => b.type === 'tls_spki_sha256');
+  if (bindings.length === 0) {
+    add('channel_binding_present', false, 'session records no TLS channel binding');
+  } else if (!Array.isArray(tlsKeys)) {
+    add('channel_binding_in_attested_keyset', false, 'upstream keyset publishes no TLS keys');
+  } else {
+    const unmatched = bindings.filter(
+      (binding) =>
+        !tlsKeys.some(
+          (key) =>
+            key.spki_sha256?.toLowerCase() === binding.spki_sha256?.toLowerCase() &&
+            (originHost(binding.origin) === null || key.domain?.toLowerCase() === originHost(binding.origin))
+        )
+    );
+    add(
+      'channel_binding_in_attested_keyset',
+      unmatched.length === 0,
+      unmatched.length === 0
+        ? undefined
+        : `no attested TLS key for ${unmatched.map((b) => `${b.origin ?? '?'}/${b.spki_sha256 ?? '?'}`).join(', ')}`
+    );
+  }
+
+  return done(upstream);
+}
