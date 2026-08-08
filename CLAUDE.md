@@ -1,95 +1,57 @@
 # CLAUDE.md
 
-## Project Goal
+Guidance for coding agents working in this repository.
 
-Extract Venice AI's end-to-end encryption into a standalone, reusable library. Currently implemented inside getbased (`/home/elkim/Documents/Claude Code/Lab Charts/js/venice-e2ee.js`) — needs to be extracted, improved, and packaged as an npm library.
+## Project Status
 
-## What Venice E2EE Does
+`venice-e2ee` is a published TypeScript ESM package for Venice AI's E2EE inference protocol. It encrypts message content in the client, decrypts streaming model output, and exposes opt-in verification for Intel TDX/DCAP evidence, NVIDIA NRAS evidence, ACI trust anchors, attested sessions, and response receipts.
 
-Venice AI advertises LLM inference inside Intel TDX TEEs (Trusted Execution Environments). The E2EE protocol encrypts message content client-side to a public key carried in TDX attestation evidence. Surrounding request metadata remains visible to Venice.
+The surrounding HTTP request is not end-to-end encrypted. API credentials, model selection, roles, request shape, token settings, timing, sizes, billing information, and network metadata remain visible to Venice.
 
-Protocol: ECDH (secp256k1) key exchange → HKDF-SHA256 key derivation → AES-256-GCM encryption. Streaming responses use per-chunk ephemeral keys (each chunk has its own server ephemeral pubkey + nonce + ciphertext).
+## Repository Layout
 
-## Current Implementation (in getbased)
+- `src/` — TypeScript source and Vitest tests
+- `dist/` — committed ESM, declarations, source maps, and the browser bundle
+- `README.md` — public API, usage, and security boundaries
+- `CHANGELOG.md` — user-visible release history
+- `SECURITY.md` — private vulnerability reporting policy
+- `RELEASING.md` — release and npm publication checklist
 
-Reference: `/home/elkim/Documents/Claude Code/Lab Charts/js/venice-e2ee.js` (93 lines)
+The package is ESM-only, targets ES2022, and is tested on Node.js 24 in GitHub Actions. Browser code relies on Web Crypto, `fetch`, streams, and text encoders. The single-file browser bundle is built with esbuild.
 
-What it does:
-- `generateE2EESession()` — ephemeral secp256k1 keypair via `@noble/secp256k1`
-- `fetchModelPublicKey(modelId, apiKey)` — fetches TEE attestation, extracts signing public key
-- `deriveAESKey(privateKey, pubKeyHex)` — ECDH shared secret → HKDF-SHA256 → AES-256-GCM CryptoKey
-- `encryptMessage(aesKey, pubKeyBytes, plaintext)` — encrypt to hex(pubKey65 + nonce12 + ciphertext)
-- `decryptChunk(privateKey, hexString)` — per-chunk ECDH derivation + AES-GCM decrypt
-- `getOrCreateE2EESession(modelId, apiKey)` — session cache with 30-min TTL
+## Public API Map
 
-What it does NOT do (v2 scope):
-- **Attestation verification** — currently trusts the public key Venice returns without verifying the AMD SEV-SNP attestation report
-- **Measurement validation** — doesn't check that the TEE code measurement matches Venice's published values
-- **Nonce verification** — sends a nonce but doesn't verify it appears in the attestation response
+- `createVeniceE2EE()` — session creation, message encryption, stream decryption, raw attestation, and receipt fetching
+- package root — low-level crypto, binding checks, receipts, ACI reports, attested sessions, and encrypted tool-calling helpers
+- `venice-e2ee/dcap` — optional `@phala/dcap-qvl` adapter
+- `venice-e2ee/nvidia` — NVIDIA NRAS evidence and token-signature verification
 
-## Library Design
+Read the implementation and exported types before changing the API. Keep `README.md` examples and the package exports synchronized with source changes.
 
-### API Surface
+## Security Invariants
 
-```js
-import { createVeniceE2EE } from 'venice-e2ee';
+- The default `binding` level parses and cross-checks fields in a supplied TDX quote; it does not authenticate the quote signature or certificate chain.
+- Full Intel quote authentication is opt-in through a `DcapVerifier`; `requireDcap` makes it mandatory.
+- Measurement reporting is not measurement approval. An allowlist is meaningful only after DCAP verification succeeds.
+- NVIDIA verification is optional and does not prove GPU/TDX co-location. Token signature verification is a separate opt-in policy.
+- Receipt verification fails closed without an independently established trust anchor and exact request/response bytes.
+- A relayed upstream ACI report currently cannot bind its keyset to REPORTDATA because the gateway nonce is not published; no anchor may be returned.
+- Unexpected plaintext model output fails closed unless `allowPlaintextResponses` is explicitly enabled.
+- Do not weaken these boundaries or describe a structural binding check as proof of enclave authenticity.
 
-const e2ee = createVeniceE2EE({ apiKey: '...' });
+## Development Workflow
 
-// Create session (fetches attestation, verifies TEE, derives keys)
-const session = await e2ee.createSession(modelId);
-
-// Encrypt messages for Venice API
-const { encryptedMessages, headers } = await e2ee.encrypt(messages, session);
-
-// Decrypt streaming response chunks
-const plaintext = await e2ee.decryptChunk(hexChunk, session);
-
-// Session management
-e2ee.clearSession();
+```bash
+npm ci
+npm audit
+npm test
+npm run build
+npm run build:browser
+git diff --exit-code -- dist
 ```
 
-### Dependencies
+Set `VENICE_API_KEY` in `.env` to enable the live integration tests. They are skipped when the key is absent.
 
-- `@noble/secp256k1` (or `@noble/curves`) — ECDH key exchange
-- Web Crypto API — HKDF, AES-256-GCM (browser-native, zero deps)
-- No Node.js-specific APIs — must work in browsers
+Source changes that affect generated output must commit the corresponding `dist/` changes. Keep `@phala/dcap-qvl` optional and outside the default lockfile; CI installs version 0.6.1 separately for compatibility testing.
 
-### Attestation Verification
-
-Venice runs on **Intel TDX** (not AMD SEV-SNP). The attestation endpoint returns a TDX DCAP v4 quote (~5010 bytes) with a PCK certificate chain. TEE provider is NEAR AI Cloud using dstack framework.
-
-**Implemented — Quote parsing + binding checks:**
-1. Parse TDX quote binary, verify client nonce in REPORTDATA (bytes 32-64)
-2. Verify signing key's Ethereum address in REPORTDATA (bytes 0-20)
-3. Reject debug-mode TEEs (TDATTRIBUTES.TUD.DEBUG bit)
-4. Cross-check Venice's `server_verification` field
-
-**Implemented as an opt-in policy — Full client-side TDX verification:**
-1. `createDcapVerifier()` delegates certificate, signature, collateral, CRL, and TCB validation to `@phala/dcap-qvl`
-2. `requireDcap: true` makes its success mandatory
-3. Parsed TDX measurements are exposed and caller-provided allowlists can be enforced
-
-**Still outside the implemented guarantees:**
-1. NVIDIA GPU attestation and event-log replay
-2. A Venice-published measurement allowlist
-3. Cryptographic binding of streaming response ephemeral keys to the attested signing key
-
-## Build
-
-TypeScript, ESM output, no bundler. Should work as:
-- npm package (`import { createVeniceE2EE } from 'venice-e2ee'`)
-- Browser ESM (`<script type="module">`)
-
-## Testing
-
-- Unit tests for crypto operations (encrypt/decrypt roundtrip)
-- Integration test against Venice's attestation endpoint (needs API key)
-- Test vectors if Venice publishes any
-
-## After the Library
-
-Once published, update getbased to use it:
-1. `npm install venice-e2ee` or vendor the built file
-2. Replace `js/venice-e2ee.js` with imports from the library
-3. Remove vendored `noble-secp256k1.js` (library handles its own deps)
+Follow `RELEASING.md` for versioning, changelog, tags, GitHub releases, npm publishing, and post-publish verification.

@@ -2,13 +2,13 @@
 
 Browser-side message encryption for [Venice AI](https://venice.ai)'s E2EE inference protocol.
 
-The library encrypts message `content` before transmission and decrypts model-output chunks in the client. The default attestation policy verifies freshness, signing-key binding, and debug mode directly from the TDX quote. It does **not** perform full DCAP validation, validate NVIDIA evidence, enforce a code-measurement allowlist, or authenticate each response to the attested signing key unless the caller adds the relevant policy and protocol checks.
+The library encrypts message `content` before transmission and decrypts model-output chunks in the client. The default `binding` policy parses the TDX quote supplied by Venice and checks that the client nonce and signing-key address appear in REPORTDATA and that debug mode is off. These are structural binding checks, not quote authentication: by default the library does **not** perform full DCAP validation, validate NVIDIA evidence, enforce a code-measurement allowlist, or authenticate each response to the attested signing key unless the caller adds the relevant policy and protocol checks.
 
 Do not treat the default `binding` result as proof of a fully verified production enclave. Venice still receives request metadata including the API credential, selected model, roles, request shape, token settings, timing, sizes, and network metadata.
 
 See the [changelog](CHANGELOG.md) for a user-readable summary of each release and its security boundaries.
 
-> **Note:** This library uses standard cryptographic primitives (ECDH, HKDF, AES-256-GCM) via audited implementations (`@noble/secp256k1`, Web Crypto API). No custom cryptography — just Venice's E2EE protocol extracted into a reusable package. Vibecoded.
+> **Note:** This library uses standard cryptographic primitives (ECDH, HKDF, AES-256-GCM) via audited implementations (`@noble/secp256k1`, Web Crypto API). No custom cryptographic primitives — just Venice's E2EE protocol extracted into a reusable package.
 
 **Protocol:** ECDH (secp256k1) key exchange → HKDF-SHA256 key derivation → AES-256-GCM encryption
 
@@ -18,22 +18,27 @@ See the [changelog](CHANGELOG.md) for a user-readable summary of each release an
 npm install venice-e2ee
 ```
 
+The package is ESM-only. Node.js 24 is the runtime exercised by CI. Browser use requires Web Crypto, `fetch`, `ReadableStream`, `TextEncoder`, and `TextDecoder`.
+
 > **Python:** See [venice-e2ee-python](https://github.com/elkimek/venice-e2ee-python) for the Python port.
 
-Or use the browser bundle directly:
+Or load the versioned browser bundle from a CDN:
 
 ```html
 <script type="module">
-  import { createVeniceE2EE } from './venice-e2ee.browser.js';
+  import { createVeniceE2EE } from 'https://cdn.jsdelivr.net/npm/venice-e2ee@0.5.3/dist/venice-e2ee.browser.js';
 </script>
 ```
+
+To self-host it, copy `dist/venice-e2ee.browser.js` from the installed package and serve that file from your own origin.
 
 ## Usage
 
 ```js
 import { createVeniceE2EE } from 'venice-e2ee';
 
-const e2ee = createVeniceE2EE({ apiKey: 'your-venice-api-key' });
+const apiKey = 'your-venice-api-key';
+const e2ee = createVeniceE2EE({ apiKey });
 
 // Create session (fetches the quote and runs the configured verification policy)
 const session = await e2ee.createSession('e2ee-qwen3-5-122b-a10b');
@@ -82,12 +87,14 @@ Creates an E2EE instance with session caching and attestation verification.
 | `verifyAttestation` | `boolean` | `true` | Verify TEE attestation on session creation |
 | `dcapVerifier` | `DcapVerifier` | — | Optional quote/certificate/TCB verifier (see below) |
 | `requireDcap` | `boolean` | `false` | Fail unless the injected DCAP verifier succeeds |
+| `gpuVerifier` | `GpuVerifier` | — | Optional NVIDIA GPU evidence verifier (see below) |
+| `requireGpu` | `boolean` | `false` | Fail unless GPU evidence is present and the injected verifier succeeds |
 | `expectedMeasurements` | `ExpectedTdxMeasurements` | — | Allowlist selected TDX measurements; requires successful DCAP verification |
 | `allowPlaintextResponses` | `boolean` | `false` | Compatibility escape hatch for legacy plaintext response content |
 
 Returns an object with:
 
-- **`createSession(modelId)`** — Generates an ephemeral keypair, fetches TEE evidence, runs the configured checks, and derives the message-encryption key. Returns an `E2EESession` with structured verification evidence. Sessions are cached per model with a 30-minute TTL.
+- **`createSession(modelId)`** — Generates an ephemeral keypair, fetches TEE evidence, runs the configured checks, and derives the message-encryption key. Returns an `E2EESession` with structured verification evidence. The instance keeps one current session: repeated calls for the same model reuse it for the configured TTL, while switching models replaces it and zeroizes the previous private key.
 - **`encrypt(messages, session)`** — Encrypts an array of `{role, content}` messages. Returns `{ encryptedMessages, headers, veniceParameters }`.
 - **`decryptChunk(hexChunk, session)`** — Decrypts one response chunk. Non-whitespace plaintext fails closed by default.
 - **`decryptStream(body, session)`** — Parses an SSE stream and yields decrypted text chunks. A successful response containing plaintext model output fails closed by default.
@@ -97,15 +104,15 @@ Returns an object with:
 
 ## Attestation verification
 
-Every `createSession` call fetches a TDX quote from Venice. The default `binding` policy checks:
+When a new session is needed, `createSession` fetches a TDX quote from Venice. The default `binding` policy performs these structural checks on the supplied quote body:
 
-1. **Nonce binding** — confirms the client nonce appears in REPORTDATA (raw or SHA-256)
+1. **Nonce binding** — compares the client nonce with REPORTDATA (raw or SHA-256)
 2. **Signing key binding** — confirms the signing key's Ethereum address matches REPORTDATA
 3. **Debug mode rejection** — rejects TEEs running in debug mode
 4. **Server cross-check** — flags negative or inconsistent Venice-reported results
 5. **Model binding** — confirms the evidence names the requested model
 
-These checks show that a fresh quote contains the supplied key and is not marked for debug. They do not validate the quote signature or certificate chain. If any configured check fails, `createSession` throws. The evidence and `verificationLevel` are available on `session.attestation`.
+These checks establish the internal binding of fields in the supplied quote body, but they do not prove that Intel signed that quote. Replay resistance and enclave authenticity require full DCAP verification (or equivalent verification performed outside this library). If any configured check fails, `createSession` throws. The evidence and `verificationLevel` are available on `session.attestation`.
 
 To disable verification (not recommended):
 
@@ -515,10 +522,10 @@ stays ciphertext.
 
 ## Security
 
-**Default client-side checks:**
-- Signing-key address is present in TDX REPORTDATA
-- Client nonce prevents replay attacks
-- Debug-mode TEEs are rejected
+**Default client-side binding checks (the quote is not authenticated until DCAP verification succeeds):**
+- Signing-key address is matched against TDX REPORTDATA
+- Client nonce is matched against TDX REPORTDATA
+- Quotes whose body marks the TEE as running in debug mode are rejected
 - ECDH intermediates are zeroized after key derivation
 - Private keys are zeroized on session clear/replacement
 
@@ -535,13 +542,16 @@ stays ciphertext.
 ## Development
 
 ```bash
-npm install
-npm test              # unit + integration tests
+npm ci
+npm audit
+npm test              # unit tests + optional live integration tests
 npm run build         # TypeScript → dist/
 npm run build:browser # single-file ESM bundle
 ```
 
 Set `VENICE_API_KEY` in `.env` to run integration tests against the live API.
+
+See [RELEASING.md](https://github.com/elkimek/venice-e2ee/blob/main/RELEASING.md) for the version, changelog, GitHub release, and npm publication process.
 
 ## Acknowledgments
 
@@ -550,4 +560,4 @@ Set `VENICE_API_KEY` in `.env` to run integration tests against the live API.
 
 ## License
 
-GPL-3.0 — see [LICENSE](LICENSE)
+GPL-3.0-only — see [LICENSE](LICENSE)

@@ -1,6 +1,6 @@
 {
   "name": "venice-e2ee",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "Client-side message encryption and attestation evidence for Venice AI E2EE models",
   "type": "module",
   "main": "dist/index.js",
