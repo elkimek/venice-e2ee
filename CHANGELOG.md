@@ -2,6 +2,18 @@
 
 This changelog summarizes user-visible changes to `venice-e2ee`. It also calls out the privacy and verification limits that matter when deciding whether to use a release.
 
+## 0.5.2 — 2026-08-08
+
+### ACI URL handling hardening
+
+- Replaced the end-anchored trailing-slash regular expressions in ACI attestation and attested-session URL construction with linear-time trimming. This removes the regex-backtracking denial-of-service risk for unusually long caller-supplied base URLs without changing the accepted URL shapes.
+- Added regression coverage for repeated trailing slashes and long slash runs followed by a non-slash character.
+
+### Toolchain and CI maintenance
+
+- Upgraded TypeScript from 5.9.3 to 7.0.2 and regenerated the committed Node and browser build output.
+- Upgraded `actions/setup-node` from 6 to 7 and `actions/dependency-review-action` from 4 to 5.
+
 ## 0.5.1 — 2026-08-07
 
 ### DCAP QVL 0.6 compatibility
