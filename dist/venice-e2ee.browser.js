@@ -2460,6 +2460,13 @@ async function verifyReceipt(signatureResponse, attestation, options) {
   return { verified: checks.length > 0 && checks.every((check) => check.ok), checks };
 }
 
+// src/url.ts
+function stripTrailingSlashes(value) {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") end--;
+  return value.slice(0, end);
+}
+
 // src/aci.ts
 var ACI_REPORT_DATA_PURPOSE = "aci.report_data.v1";
 var ACI_KEYSET_ENDORSEMENT_PURPOSE = "aci.keyset.endorsement.v1";
@@ -2492,7 +2499,7 @@ function constantTimeEqual2(a, b) {
   return diff === 0;
 }
 async function fetchAciAttestation(baseUrl, nonce, fetchImpl = fetch) {
-  const url = `${baseUrl.replace(/\/+$/, "")}${ACI_ATTESTATION_PATH}?nonce=${encodeURIComponent(nonce)}`;
+  const url = `${stripTrailingSlashes(baseUrl)}${ACI_ATTESTATION_PATH}?nonce=${encodeURIComponent(nonce)}`;
   const res = await fetchImpl(url);
   if (!res.ok) {
     throw new Error(`ACI attestation fetch failed (${res.status}) from ${baseUrl}`);
@@ -2727,7 +2734,7 @@ function computeAttestedSessionId(session) {
   return `as_${toHex(sha256(new TextEncoder().encode(jcsStringify(material))))}`;
 }
 async function fetchAttestedSession(baseUrl, sessionId, fetchImpl = fetch) {
-  const url = `${baseUrl.replace(/\/+$/, "")}${ACI_SESSIONS_PATH}/${encodeURIComponent(sessionId)}`;
+  const url = `${stripTrailingSlashes(baseUrl)}${ACI_SESSIONS_PATH}/${encodeURIComponent(sessionId)}`;
   const res = await fetchImpl(url);
   if (!res.ok) {
     throw new Error(

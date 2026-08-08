@@ -36,6 +36,7 @@
 import { sha256 } from '@noble/hashes/sha2.js';
 import { toHex } from './crypto.js';
 import { jcsStringify } from './receipt.js';
+import { stripTrailingSlashes } from './url.js';
 import { verifyRelayedAciAttestation, } from './aci.js';
 /** Path of the unauthenticated attested-session store. */
 export const ACI_SESSIONS_PATH = '/v1/aci/sessions';
@@ -59,7 +60,7 @@ export function computeAttestedSessionId(session) {
 }
 /** Fetch one attested session by id. Public endpoint; no credentials are sent. */
 export async function fetchAttestedSession(baseUrl, sessionId, fetchImpl = fetch) {
-    const url = `${baseUrl.replace(/\/+$/, '')}${ACI_SESSIONS_PATH}/${encodeURIComponent(sessionId)}`;
+    const url = `${stripTrailingSlashes(baseUrl)}${ACI_SESSIONS_PATH}/${encodeURIComponent(sessionId)}`;
     const res = await fetchImpl(url);
     if (!res.ok) {
         // Sessions are retained only as long as the receipts citing them, so a 404

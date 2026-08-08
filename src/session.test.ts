@@ -338,6 +338,18 @@ describe('decodeSessionEvidence', () => {
 });
 
 describe('fetchAttestedSession', () => {
+  it('removes trailing base-URL slashes before appending the session path', async () => {
+    let requested: string | null = null;
+    const fetchImpl = (async (url: string) => {
+      requested = url;
+      return { ok: true, json: async () => ({}) };
+    }) as unknown as typeof fetch;
+
+    await fetchAttestedSession('https://tee.example///', 'as/x', fetchImpl);
+
+    expect(requested).toBe('https://tee.example/v1/aci/sessions/as%2Fx');
+  });
+
   it('names expiry rather than absence on a 404', async () => {
     const fetchImpl = (async () => ({ ok: false, status: 404 })) as unknown as typeof fetch;
     await expect(fetchAttestedSession('https://tee.example', 'as_x', fetchImpl)).rejects.toThrow(
