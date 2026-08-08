@@ -33,6 +33,7 @@ import { sha256 } from '@noble/hashes/sha2.js';
 import { verify as secpVerify } from '@noble/secp256k1';
 import { toHex, fromHex } from './crypto.js';
 import { parseTdxQuote } from './attestation.js';
+import { stripTrailingSlashes } from './url.js';
 import { computeWorkloadId, computeWorkloadKeysetDigest, jcsStringify, } from './receipt.js';
 /** Purpose tag in the statement the quote's `report_data` covers (ACI §4). */
 export const ACI_REPORT_DATA_PURPOSE = 'aci.report_data.v1';
@@ -81,7 +82,7 @@ function constantTimeEqual(a, b) {
  * are sent: the endpoint is public, and the report authenticates itself.
  */
 export async function fetchAciAttestation(baseUrl, nonce, fetchImpl = fetch) {
-    const url = `${baseUrl.replace(/\/+$/, '')}${ACI_ATTESTATION_PATH}?nonce=${encodeURIComponent(nonce)}`;
+    const url = `${stripTrailingSlashes(baseUrl)}${ACI_ATTESTATION_PATH}?nonce=${encodeURIComponent(nonce)}`;
     const res = await fetchImpl(url);
     if (!res.ok) {
         throw new Error(`ACI attestation fetch failed (${res.status}) from ${baseUrl}`);

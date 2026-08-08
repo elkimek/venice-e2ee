@@ -34,6 +34,7 @@ import { sha256 } from '@noble/hashes/sha2.js';
 import { verify as secpVerify } from '@noble/secp256k1';
 import { toHex, fromHex } from './crypto.js';
 import { parseTdxQuote } from './attestation.js';
+import { stripTrailingSlashes } from './url.js';
 import {
   computeWorkloadId,
   computeWorkloadKeysetDigest,
@@ -192,7 +193,7 @@ export async function fetchAciAttestation(
   nonce: string,
   fetchImpl: typeof fetch = fetch
 ): Promise<AciAttestationReport> {
-  const url = `${baseUrl.replace(/\/+$/, '')}${ACI_ATTESTATION_PATH}?nonce=${encodeURIComponent(nonce)}`;
+  const url = `${stripTrailingSlashes(baseUrl)}${ACI_ATTESTATION_PATH}?nonce=${encodeURIComponent(nonce)}`;
   const res = await fetchImpl(url);
   if (!res.ok) {
     throw new Error(`ACI attestation fetch failed (${res.status}) from ${baseUrl}`);

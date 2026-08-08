@@ -37,6 +37,7 @@
 import { sha256 } from '@noble/hashes/sha2.js';
 import { toHex } from './crypto.js';
 import { jcsStringify } from './receipt.js';
+import { stripTrailingSlashes } from './url.js';
 import {
   verifyRelayedAciAttestation,
   type AciAttestationReport,
@@ -132,7 +133,7 @@ export async function fetchAttestedSession(
   sessionId: string,
   fetchImpl: typeof fetch = fetch
 ): Promise<AttestedSession> {
-  const url = `${baseUrl.replace(/\/+$/, '')}${ACI_SESSIONS_PATH}/${encodeURIComponent(sessionId)}`;
+  const url = `${stripTrailingSlashes(baseUrl)}${ACI_SESSIONS_PATH}/${encodeURIComponent(sessionId)}`;
   const res = await fetchImpl(url);
   if (!res.ok) {
     // Sessions are retained only as long as the receipts citing them, so a 404
