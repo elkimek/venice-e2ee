@@ -2,6 +2,15 @@
 
 This changelog summarizes user-visible changes to `venice-e2ee`. It also calls out the privacy and verification limits that matter when deciding whether to use a release.
 
+## 0.5.3 — 2026-08-08
+
+### Documentation and distribution
+
+- Fixed the primary usage example and browser-bundle path now that the package is available from npm.
+- Aligned the API reference with the GPU verification options and the single-session cache actually implemented by the library.
+- Clarified that the default `binding` policy checks fields inside the supplied quote but does not authenticate the quote without DCAP verification.
+- Replaced the obsolete development notes, documented the tested runtime and ESM packaging, and added the GitHub/npm release procedure.
+
 ## 0.5.2 — 2026-08-08
 
 ### ACI URL handling hardening
@@ -116,7 +125,7 @@ Version 0.2.0 makes the library's security result explicit instead of presenting
 
 ### What changed
 
-- **Encrypted responses fail closed.** Non-empty plaintext model output is rejected unless the caller deliberately enables the legacy `allowPlaintext` compatibility option.
+- **Encrypted responses fail closed.** Non-empty plaintext model output is rejected unless the caller deliberately enables the `allowPlaintextResponses` compatibility option.
 - **Attestation results describe what was actually checked.** Sessions report `binding`, `dcap`, or `measured` verification levels alongside structured evidence and errors.
 - **Stronger verification is available as an option.** Callers can add Intel TDX DCAP certificate, signature, revocation, and TCB checks through the optional `@phala/dcap-qvl` adapter.
 - **Known measurements can be enforced.** Applications with a trusted allowlist can require expected MRTD and RTMR values rather than merely displaying measurements reported by the quote.
@@ -135,7 +144,7 @@ Do not describe the default result as proof of a fully verified production encla
 
 ### Upgrading from 0.1.0
 
-- Applications that intentionally accept plaintext responses must now set `allowPlaintext: true`. This is a compatibility escape hatch, not the recommended configuration.
+- Applications that intentionally accept plaintext responses must now set `allowPlaintextResponses: true`. This is a compatibility escape hatch, not the recommended configuration.
 - Applications that require full Intel quote validation should configure a DCAP verifier and set `requireDcap: true`.
 - Applications that require approved code measurements should additionally provide `expectedMeasurements`.
 
