@@ -1,7 +1,7 @@
 {
   "name": "venice-e2ee",
   "version": "0.5.3",
-  "description": "Client-side message encryption and attestation evidence for Venice AI E2EE models",
+  "description": "Client-side encrypted inference, attestation evidence, and provider-neutral ACI E2EE primitives",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -17,6 +17,10 @@
     "./nvidia": {
       "import": "./dist/nvidia.js",
       "types": "./dist/nvidia.d.ts"
+    },
+    "./aci/e2ee": {
+      "import": "./dist/aci-e2ee.js",
+      "types": "./dist/aci-e2ee.d.ts"
     }
   },
   "files": [
@@ -30,6 +34,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@noble/curves": "^2.2.0",
     "@noble/hashes": "^2.0.1",
     "@noble/secp256k1": "^2.1.0"
   },
@@ -57,6 +62,8 @@
   "license": "GPL-3.0-only",
   "keywords": [
     "venice",
+    "aci",
+    "confidential-inference",
     "e2ee",
     "encryption",
     "tee",

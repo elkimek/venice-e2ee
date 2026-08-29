@@ -1,6 +1,8 @@
 # venice-e2ee
 
-Browser-side message encryption for [Venice AI](https://venice.ai)'s E2EE inference protocol.
+Browser-side message encryption for [Venice AI](https://venice.ai)'s E2EE inference protocol,
+plus provider-neutral ACI attestation, receipt, session, and E2EE v2 primitives for reusable
+encrypted-inference integrations.
 
 The library encrypts message `content` before transmission and decrypts model-output chunks in the client. The default `binding` policy parses the TDX quote supplied by Venice and checks that the client nonce and signing-key address appear in REPORTDATA and that debug mode is off. These are structural binding checks, not quote authentication: by default the library does **not** perform full DCAP validation, validate NVIDIA evidence, enforce a code-measurement allowlist, or authenticate each response to the attested signing key unless the caller adds the relevant policy and protocol checks.
 
@@ -366,6 +368,54 @@ const bodyBindingOnly =
 `verified` remains false in that case, and deliberately so — the library should not decide
 that a missing binding is acceptable. That judgement belongs to the caller, who knows
 whether it sits behind a re-serializing gateway.
+
+## Provider-neutral ACI E2EE v2
+
+The `venice-e2ee/aci/e2ee` entry point implements the field-encryption layer used by native
+ACI gateways independently of Venice account, model, or routing policy:
+
+```js
+import {
+  createAciE2eeClientKeyPair,
+  decryptAciE2eeField,
+  encryptAciE2eeField,
+  generateAciE2eeNonce,
+} from 'venice-e2ee/aci/e2ee';
+
+const client = createAciE2eeClientKeyPair();
+const context = {
+  purpose: 'aci.e2ee.request.v2',
+  model: 'provider/model',
+  field: 'messages.0.content',
+  nonce: generateAciE2eeNonce(),
+  timestamp: Math.floor(Date.now() / 1000),
+};
+
+const ciphertext = await encryptAciE2eeField(
+  'This text is encrypted before transport.',
+  quoteBoundE2eePublicKey,
+  context
+);
+
+// For a response, use purpose `aci.e2ee.response.v2`, the exact response id,
+// response field, request nonce, and request timestamp supplied by the protocol.
+const plaintext = await decryptAciE2eeField(
+  encryptedResponseField,
+  client.secretKey,
+  responseContext
+);
+client.secretKey.fill(0);
+```
+
+This module performs X25519 key agreement, HKDF-SHA256 key derivation, and AES-256-GCM
+field encryption with canonical ACI additional authenticated data. It does **not** choose a
+provider or decide whether a key is trusted. The caller must first verify fresh attestation,
+bind the exact key and workload to that evidence, enforce its own measurement and routing
+policy, and reject plaintext fallback.
+
+The API is the first provider-neutral extraction toward a multi-provider encrypted-inference
+monorepo. Existing Venice exports remain compatible while provider-specific account and
+transport adapters are separated incrementally.
 
 ## Function calling
 

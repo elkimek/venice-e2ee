@@ -281,6 +281,21 @@ export {
   fetchAttestedSession,
   verifyAttestedSession,
 } from './session.js';
+export {
+  ACI_E2EE_ALGORITHM,
+  ACI_E2EE_VERSION,
+  aciE2eeAad,
+  createAciE2eeClientKeyPair,
+  decryptAciE2eeField,
+  encryptAciE2eeField,
+  generateAciE2eeNonce,
+} from './aci-e2ee.js';
+export type {
+  AciE2eeClientKeyPair,
+  AciE2eeContext,
+  AciE2eeEncryptOptions,
+  AciE2eeKeyPairOptions,
+} from './aci-e2ee.js';
 export type {
   AciChannelBinding,
   AciClaim,

@@ -2,6 +2,14 @@
 
 This changelog summarizes user-visible changes to `venice-e2ee`. It also calls out the privacy and verification limits that matter when deciding whether to use a release.
 
+## Unreleased
+
+### Provider-neutral ACI E2EE v2
+
+- Added `venice-e2ee/aci/e2ee` with typed X25519, HKDF-SHA256, and AES-256-GCM field encryption and decryption for native ACI gateways.
+- Added canonical request/response AAD construction, deterministic interoperability vectors, strict hexadecimal/context validation, fail-closed response authentication, and explicit client-key zeroization support.
+- Kept provider selection, credentials, model admission, measurements, deployment pins, routing, and commercial policy outside the module. Callers must supply an independently attested E2EE public key and enforce their own trust policy.
+
 ## 0.5.3 — 2026-08-08
 
 ### Documentation and distribution

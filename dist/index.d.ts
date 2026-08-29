@@ -24,6 +24,8 @@ export { verifyReceipt, receiptSigningBytes, recoverReceiptSigner, jcsStringify,
 export { ACI_ATTESTATION_PATH, ACI_KEYSET_ENDORSEMENT_PURPOSE, ACI_REPORT_DATA_PURPOSE, aciKeysetEndorsementPayload, aciReportData, aciReportDataStatement, establishAciTrustAnchor, fetchAciAttestation, generateAciNonce, verifyAciAttestation, verifyRelayedAciAttestation, } from './aci.js';
 export type { AciAttestationReport, AciAttestationResult, AciCheck, AciKeysetEndorsement, VerifyAciAttestationOptions, } from './aci.js';
 export { ACI_SESSIONS_PATH, computeAttestedSessionId, decodeSessionEvidence, fetchAttestedSession, verifyAttestedSession, } from './session.js';
+export { ACI_E2EE_ALGORITHM, ACI_E2EE_VERSION, aciE2eeAad, createAciE2eeClientKeyPair, decryptAciE2eeField, encryptAciE2eeField, generateAciE2eeNonce, } from './aci-e2ee.js';
+export type { AciE2eeClientKeyPair, AciE2eeContext, AciE2eeEncryptOptions, AciE2eeKeyPairOptions, } from './aci-e2ee.js';
 export type { AciChannelBinding, AciClaim, AttestedSession, AttestedSessionResult, VerifyAttestedSessionOptions, } from './session.js';
 export type { Receipt, ReceiptEvent, ReceiptCheck, ReceiptVerification, SignatureResponse, WorkloadKeyset, WorkloadIdentity, WorkloadPublicKey, KeysetKey, ReceiptTrustAnchor, ReceiptBody, ReceiptResponseHashField, VerifyReceiptOptions, } from './receipt.js';
 export { generateKeypair, deriveAESKey, encryptMessage, decryptChunk, toHex, fromHex, } from './crypto.js';
