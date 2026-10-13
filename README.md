@@ -97,7 +97,7 @@ Returns an object with:
 - **`createSession(modelId)`** — Generates an ephemeral keypair, fetches TEE evidence, runs the configured checks, and derives the message-encryption key. Returns an `E2EESession` with structured verification evidence. The instance keeps one current session: repeated calls for the same model reuse it for the configured TTL, while switching models replaces it and zeroizes the previous private key.
 - **`encrypt(messages, session)`** — Encrypts an array of `{role, content}` messages. Returns `{ encryptedMessages, headers, veniceParameters }`.
 - **`decryptChunk(hexChunk, session)`** — Decrypts one response chunk. Non-whitespace plaintext fails closed by default.
-- **`decryptStream(body, session)`** — Parses an SSE stream and yields decrypted text chunks. A successful response containing plaintext model output fails closed by default.
+- **`decryptStream(body, session)`** — Parses an SSE stream and yields decrypted text chunks. A successful response containing plaintext model output fails closed by default. A malformed event or a stream that ends without `data: [DONE]` throws instead of ending as if complete; this does not detect whole chunks dropped, reordered or replayed by a relay.
 - **`attest(modelId)`** — Fetches Venice's raw compatibility attestation response. It is evidence, not a receipt trust anchor by itself.
 - **`fetchResponseSignature(modelId, requestId)`** — Fetches the signed ACI receipt wrapper for a completion.
 - **`clearSession()`** — Zeroizes the private key and clears the cached session.

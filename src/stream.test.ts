@@ -33,6 +33,27 @@ function createChunkedSSEStream(events: string[]): ReadableStream<Uint8Array> {
   });
 }
 
+function createRawStream(text: string): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  return new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode(text));
+      controller.close();
+    },
+  });
+}
+
+async function collect(
+  stream: ReadableStream<Uint8Array>,
+  privateKey: Uint8Array
+): Promise<string[]> {
+  const chunks: string[] = [];
+  for await (const chunk of decryptSSEStream(stream, privateKey)) {
+    chunks.push(chunk);
+  }
+  return chunks;
+}
+
 async function encryptForStream(
   plaintext: string,
   serverPrivateKey: Uint8Array,
@@ -176,5 +197,76 @@ describe('decryptSSEStream', () => {
       chunks.push(chunk);
     }
     expect(chunks).toEqual([]);
+  });
+
+  it('completes on [DONE] without a trailing newline', async () => {
+    const client = generateKeypair();
+    const cipherHex = await encryptForStream('done', client.privateKey, client.pubKeyHex);
+    const event = JSON.stringify({ choices: [{ delta: { content: cipherHex } }] });
+    const stream = createRawStream(`data: ${event}\n\ndata: [DONE]`);
+
+    expect(await collect(stream, client.privateKey)).toEqual(['done']);
+  });
+
+  it('throws on a malformed JSON event', async () => {
+    const client = generateKeypair();
+    const first = await encryptForStream('kept', client.privateKey, client.pubKeyHex);
+    const lost = await encryptForStream('lost', client.privateKey, client.pubKeyHex);
+    const last = await encryptForStream('after', client.privateKey, client.pubKeyHex);
+    const events = [
+      JSON.stringify({ choices: [{ delta: { content: first } }] }),
+      `{"choices":[{"delta":{"content":"${lost}"}}`,
+      JSON.stringify({ choices: [{ delta: { content: last } }] }),
+      '[DONE]',
+    ];
+
+    await expect(collect(createSSEStream(events), client.privateKey)).rejects.toThrow(
+      'malformed event'
+    );
+  });
+
+  it('throws when the stream ends without [DONE]', async () => {
+    const client = generateKeypair();
+    const cipherHex = await encryptForStream('cut', client.privateKey, client.pubKeyHex);
+    const event = JSON.stringify({ choices: [{ delta: { content: cipherHex } }] });
+
+    await expect(collect(createSSEStream([event]), client.privateKey)).rejects.toThrow(
+      'ended without [DONE]'
+    );
+  });
+
+  it('throws when the stream ends after a complete event without a newline', async () => {
+    const client = generateKeypair();
+    const cipherHex = await encryptForStream('cut', client.privateKey, client.pubKeyHex);
+    const event = JSON.stringify({ choices: [{ delta: { content: cipherHex } }] });
+
+    await expect(collect(createRawStream(`data: ${event}`), client.privateKey)).rejects.toThrow(
+      'ended without [DONE]'
+    );
+  });
+
+  it('throws when the stream ends inside a partial event', async () => {
+    const client = generateKeypair();
+    const first = await encryptForStream('kept', client.privateKey, client.pubKeyHex);
+    const partial = await encryptForStream('partial', client.privateKey, client.pubKeyHex);
+    const event = JSON.stringify({ choices: [{ delta: { content: first } }] });
+    const text = `data: ${event}\n\ndata: {"choices":[{"delta":{"content":"${partial.slice(0, 40)}`;
+
+    await expect(collect(createRawStream(text), client.privateKey)).rejects.toThrow(
+      'malformed event'
+    );
+  });
+
+  it('throws on tampered ciphertext', async () => {
+    const client = generateKeypair();
+    const cipherHex = await encryptForStream('tampered', client.privateKey, client.pubKeyHex);
+    // The last hex digit lies in the AES-GCM authentication tag.
+    const lastDigit = cipherHex.slice(-1);
+    const tampered = cipherHex.slice(0, -1) + (lastDigit === '0' ? '1' : '0');
+    const event = JSON.stringify({ choices: [{ delta: { content: tampered } }] });
+
+    await expect(
+      collect(createSSEStream([event, '[DONE]']), client.privateKey)
+    ).rejects.toThrow('E2EE decryption failed');
   });
 });

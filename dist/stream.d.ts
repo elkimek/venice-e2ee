@@ -4,6 +4,10 @@
  * `choices[0].delta.content` holding an encrypted hex string (or plaintext
  * for whitespace tokens).
  *
+ * A malformed event or a stream that ends without `data: [DONE]` throws, so a
+ * visibly truncated response is not mistaken for a complete one. This does not
+ * detect whole events dropped, reordered or replayed by a relay.
+ *
  * Usage:
  *   const response = await fetch(url, { ... });
  *   for await (const text of decryptSSEStream(response.body, session.privateKey)) {
