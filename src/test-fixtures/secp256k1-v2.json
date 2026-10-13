@@ -1,0 +1,32 @@
+{
+  "version": "2.3.0",
+  "key": "0000000000000000000000000000000000000000000000000000000000000001",
+  "publicKey": "0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8",
+  "keyset": {
+    "workload_identity": {
+      "public_key": {
+        "algo": "ecdsa-secp256k1",
+        "public_key": "0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8"
+      },
+      "subject": null
+    },
+    "keyset_epoch": {
+      "version": 1,
+      "not_after": 4000000000
+    },
+    "receipt_signing_keys": [
+      {
+        "key_id": "receipt-ed25519-v1",
+        "algo": "ed25519",
+        "public_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ]
+  },
+  "digest": "sha256:d21ddcb5e2bab9130a731500003a2c6e3d8df8315e76e94258dda5a86b3f1926",
+  "endorsement": "3fc57e102195ea3ee8ef153a0b68fbf6c0c9451dd36005381e0c6a1fb97a6cf12dc74b778a156398f8b38f70d5173d59accfb344c09ab6940dc414bd16590138",
+  "highS": "3fc57e102195ea3ee8ef153a0b68fbf6c0c9451dd36005381e0c6a1fb97a6cf1d238b48875ea9c67074c708f2ae8c2a50ddf29a1eeade9a7b20e49cfb9dd4009",
+  "text": "Venice v2 compatibility 🌍",
+  "signature": "0xe80d1ca8acadb1db0c8a2a19a09a3e5ad5daf98f576cd95abda025485fe2593570168a75eb8aead04d70c5afc46cf6a4b4562632048e889379e0790c5c26646f00",
+  "address": "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+  "cipher": "04c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee51ae168fea63dc339a3c58419466ceaeef7f632653266d0e1236431a950cfe52a000000000000000000000000f5c0ee72edc37baacc8e785be43f3216e96c15c5c47d7c37dca28b111f93a816d5689bf7f60db37b209ff922"
+}

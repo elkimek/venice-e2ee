@@ -441,7 +441,7 @@ describe('verifyReceipt', () => {
   // signature is made by the secp256k1 key whose address the TDX quote carries
   // in REPORTDATA, so it is checkable against the quote directly.
   describe('top-level signature', () => {
-    const privateKey = utils.randomPrivateKey();
+    const privateKey = utils.randomSecretKey();
     const address = `0x${toHex(deriveEthAddress(toHex(getPublicKey(privateKey, false))))}`;
     const strip = (hash: string): string => hash.replace(/^sha256:/, '');
     const signedText = `${strip(hashReceiptBody(REQUEST_BODY))}:${strip(hashReceiptBody(RESPONSE_BODY))}`;
@@ -449,8 +449,11 @@ describe('verifyReceipt', () => {
     async function personalSign(text: string, key: Uint8Array): Promise<string> {
       const message = enc.encode(text);
       const prefix = enc.encode(`\x19Ethereum Signed Message:\n${message.length}`);
-      const signature = await signAsync(keccak_256(new Uint8Array([...prefix, ...message])), key);
-      return `0x${signature.toCompactHex()}${signature.recovery.toString(16).padStart(2, '0')}`;
+      const signature = await signAsync(keccak_256(new Uint8Array([...prefix, ...message])), key, {
+        prehash: false, format: 'recovered',
+      });
+      // Venice's recovery byte follows r || s; noble's recovered format puts it first.
+      return `0x${toHex(signature.slice(1))}${signature[0].toString(16).padStart(2, '0')}`;
     }
 
     async function signedFixture(overrides: { text?: string; key?: Uint8Array } = {}) {
@@ -491,7 +494,7 @@ describe('verifyReceipt', () => {
     });
 
     it('refuses a signature made by a key the quote does not bind', async () => {
-      const fixture = await signedFixture({ key: utils.randomPrivateKey() });
+      const fixture = await signedFixture({ key: utils.randomSecretKey() });
       const result = await verifyReceipt(
         fixture.signatureResponse,
         fixture.attestation,

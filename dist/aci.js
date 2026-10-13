@@ -222,8 +222,9 @@ async function runAciChecks(report, nonce, options = {}) {
                 const payloadHash = sha256(aciKeysetEndorsementPayload(keysetDigest));
                 // lowS is off deliberately: a high-S endorsement is still a valid
                 // signature over these bytes, and malleability buys an attacker
-                // nothing here — the signature is never used as an identifier.
-                const ok = secpVerify(fromHex(endorsement.value), payloadHash, keyset.workload_identity.public_key.public_key, { lowS: false });
+                // nothing here — the signature is never used as an identifier. The
+                // payload is already hashed, so disable v3's default SHA-256 prehash.
+                const ok = secpVerify(fromHex(endorsement.value), payloadHash, fromHex(keyset.workload_identity.public_key.public_key), { lowS: false, prehash: false });
                 add('keyset_endorsement', ok, ok ? undefined : 'identity key did not endorse this keyset digest');
             }
             catch (error) {
