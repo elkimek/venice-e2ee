@@ -581,10 +581,9 @@ async function* decryptSSEStream(body, privateKey, allowPlaintextResponses = fal
   try {
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
+      buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
-      buffer = lines.pop();
+      buffer = done ? "" : lines.pop();
       for (const line of lines) {
         if (!line.startsWith("data: ")) continue;
         const data = line.slice(6).trim();
@@ -593,7 +592,7 @@ async function* decryptSSEStream(body, privateKey, allowPlaintextResponses = fal
         try {
           event = JSON.parse(data);
         } catch {
-          continue;
+          throw new Error("Venice stream contained a malformed event; the response is incomplete");
         }
         const content = event.choices?.[0]?.delta?.content;
         if (content === void 0 || content === null) continue;
@@ -608,33 +607,9 @@ async function* decryptSSEStream(body, privateKey, allowPlaintextResponses = fal
           throw e;
         }
       }
+      if (done) break;
     }
-    if (buffer.trim()) {
-      if (buffer.startsWith("data: ")) {
-        const data = buffer.slice(6).trim();
-        if (data !== "[DONE]") {
-          let event;
-          try {
-            event = JSON.parse(data);
-          } catch {
-            event = {};
-          }
-          const content = event.choices?.[0]?.delta?.content;
-          if (content !== void 0 && content !== null) {
-            try {
-              yield await decryptChunk(privateKey, content, allowPlaintextResponses);
-            } catch (e) {
-              if (e instanceof DOMException && e.name === "OperationError") {
-                throw new Error(
-                  "E2EE decryption failed \u2014 session may be stale. Clear the session and retry."
-                );
-              }
-              throw e;
-            }
-          }
-        }
-      }
-    }
+    throw new Error("Venice stream ended without [DONE]; the response is truncated");
   } finally {
     reader.releaseLock();
   }

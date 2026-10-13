@@ -2,6 +2,15 @@
 
 This changelog summarizes user-visible changes to `venice-e2ee`. It also calls out the privacy and verification limits that matter when deciding whether to use a release.
 
+## Unreleased
+
+### Truncated and malformed streams fail closed
+
+- `decryptStream()` and `decryptSSEStream()` now throw when an SSE `data:` event is not valid JSON, and when the stream ends without `data: [DONE]`, including a stream cut off inside a partial event. Previously a malformed event was skipped along with any ciphertext it carried, and a cut-off stream ended as if the response were complete. Text already yielded before the error is not withdrawn, so callers should discard partial output when the generator throws.
+- `[DONE]` without a trailing newline still completes normally. Added regression coverage for this and for a failed AES-GCM tag check.
+- This makes a visibly broken stream fail; it does not make the stream tamper-evident. Chunks are encrypted independently without a sequence number, and `[DONE]` and `finish_reason` are plaintext, so a relay can still drop, reorder or replay whole chunks within a session, or end the stream early with its own `[DONE]`. Closing that gap needs a protocol change at Venice.
+- `data: {"error": ...}` events are still skipped rather than surfaced, and `delta.reasoning_content` is still neither decrypted nor yielded.
+
 ## 0.5.3 — 2026-08-08
 
 ### Documentation and distribution
