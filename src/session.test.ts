@@ -16,7 +16,7 @@ import type { DcapVerifier } from './types.js';
 const ORIGIN = 'https://glm-5-2.aus1-router.phala.com';
 const SPKI = '0d'.repeat(32);
 
-const identityPrivateKey = utils.randomPrivateKey();
+const identityPrivateKey = utils.randomSecretKey();
 const identityPublicKey = toHex(getPublicKey(identityPrivateKey, false));
 
 function upstreamKeyset(spki = SPKI): WorkloadKeyset {
@@ -48,7 +48,8 @@ async function upstreamReport(keyset: WorkloadKeyset) {
   const reportData = sha256(new TextEncoder().encode('whatever the gateway sent'));
   const endorsement = await signAsync(
     sha256(aciKeysetEndorsementPayload(digest)),
-    identityPrivateKey
+    identityPrivateKey,
+    { prehash: false }
   );
   return {
     api_version: 'aci/1',
@@ -59,7 +60,7 @@ async function upstreamReport(keyset: WorkloadKeyset) {
       tee_type: 'tdx',
       workload_keyset: keyset,
       report_data: toHex(reportData),
-      keyset_endorsement: { algo: 'ecdsa-secp256k1', value: endorsement.toCompactHex() },
+      keyset_endorsement: { algo: 'ecdsa-secp256k1', value: toHex(endorsement) },
       source_provenance: { repo_commit: '70513c1c' },
       freshness: { fetched_at: 1_000, stale_after: 4_000_000_000 },
       evidence: { quote: quoteWith(reportData) },

@@ -102,7 +102,7 @@ describe('deriveEthAddress', () => {
 
 describe('verifyAttestation', () => {
   // Generate a test keypair and derive its Ethereum address
-  const privKey = utils.randomPrivateKey();
+  const privKey = utils.randomSecretKey();
   const pubKey = getPublicKey(privKey, false);
   const pubKeyHex = toHex(pubKey);
   const ethAddr = deriveEthAddress(pubKeyHex);

@@ -30,7 +30,7 @@ function buildAciQuote(statementDigest: Uint8Array, opts: {
   return toHex(quote);
 }
 
-const identityPrivateKey = utils.randomPrivateKey();
+const identityPrivateKey = utils.randomSecretKey();
 const identityPublicKey = toHex(getPublicKey(identityPrivateKey, false));
 
 function buildKeyset(overrides: Partial<WorkloadKeyset> = {}): WorkloadKeyset {
@@ -51,7 +51,7 @@ const NONCE = 'a1'.repeat(32);
 
 async function endorse(keysetDigest: string): Promise<string> {
   const hash = sha256(aciKeysetEndorsementPayload(keysetDigest));
-  return (await signAsync(hash, identityPrivateKey)).toCompactHex();
+  return toHex(await signAsync(hash, identityPrivateKey, { prehash: false }));
 }
 
 /** A complete, internally consistent report. Individual tests break one thing. */

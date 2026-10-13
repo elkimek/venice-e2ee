@@ -7,21 +7,21 @@ export function fromHex(hex) {
         throw new Error('Invalid hex: odd length');
     const bytes = new Uint8Array(hex.length / 2);
     for (let i = 0; i < hex.length; i += 2) {
-        const byte = parseInt(hex.substring(i, i + 2), 16);
-        if (Number.isNaN(byte))
+        const pair = hex.substring(i, i + 2);
+        if (!/^[0-9a-f]{2}$/i.test(pair))
             throw new Error(`Invalid hex character at position ${i}`);
-        bytes[i / 2] = byte;
+        bytes[i / 2] = parseInt(pair, 16);
     }
     return bytes;
 }
 export function generateKeypair() {
-    const privateKey = utils.randomPrivateKey();
+    const privateKey = utils.randomSecretKey();
     const publicKey = getPublicKey(privateKey, false); // uncompressed = 65 bytes
     const pubKeyHex = toHex(publicKey);
     return { privateKey, publicKey, pubKeyHex };
 }
 export async function deriveAESKey(myPrivateKey, theirPublicKeyHex) {
-    const sharedPoint = getSharedSecret(myPrivateKey, theirPublicKeyHex, false);
+    const sharedPoint = getSharedSecret(myPrivateKey, fromHex(theirPublicKeyHex), false);
     const xCoord = sharedPoint.slice(1, 33); // 32-byte x-coordinate
     try {
         const hkdfKey = await crypto.subtle.importKey('raw', xCoord, 'HKDF', false, ['deriveKey']);

@@ -14,6 +14,10 @@ describe('hex utilities', () => {
     expect(fromHex(toHex(bytes))).toEqual(bytes);
   });
 
+  it.each(['0g', '1z', 'ff 1', 'zz'])('rejects malformed hex %s', (value) => {
+    expect(() => fromHex(value)).toThrow('Invalid hex character');
+  });
+
   it('handles empty input', () => {
     expect(toHex(new Uint8Array(0))).toBe('');
     expect(fromHex('')).toEqual(new Uint8Array(0));

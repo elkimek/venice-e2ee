@@ -26,7 +26,7 @@
 
 import { sha256 } from '@noble/hashes/sha2.js';
 import { keccak_256 } from '@noble/hashes/sha3.js';
-import { Signature } from '@noble/secp256k1';
+import { recoverPublicKey, Signature } from '@noble/secp256k1';
 import { toHex } from './crypto.js';
 import { deriveEthAddress, type AttestationResponse } from './attestation.js';
 
@@ -268,7 +268,10 @@ export function recoverReceiptSigner(text: string, signatureHex: string): string
     BigInt(`0x${clean.slice(64, 128)}`),
     recovery
   );
-  const publicKey = signature.recoverPublicKey(digest).toRawBytes(false);
+  // The EIP-191 digest is already Keccak-hashed; do not hash it again.
+  const publicKey = recoverPublicKey(signature.toBytes('recovered'), digest, {
+    prehash: false, isCompressed: false,
+  });
   return `0x${toHex(deriveEthAddress(toHex(publicKey)))}`;
 }
 
