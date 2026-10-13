@@ -26,7 +26,7 @@ Or load the versioned browser bundle from a CDN:
 
 ```html
 <script type="module">
-  import { createVeniceE2EE } from 'https://cdn.jsdelivr.net/npm/venice-e2ee@0.5.3/dist/venice-e2ee.browser.js';
+  import { createVeniceE2EE } from 'https://cdn.jsdelivr.net/npm/venice-e2ee@0.5.4/dist/venice-e2ee.browser.js';
 </script>
 ```
 
