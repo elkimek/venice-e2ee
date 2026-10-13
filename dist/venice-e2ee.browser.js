@@ -2382,9 +2382,10 @@ ${message.length}`);
     BigInt(`0x${clean2.slice(64, 128)}`),
     recovery
   );
-  const publicKey = Point.fromBytes(
-    recoverPublicKey(signature.toBytes("recovered"), digest, { prehash: false })
-  ).toBytes(false);
+  const publicKey = recoverPublicKey(signature.toBytes("recovered"), digest, {
+    prehash: false,
+    isCompressed: false
+  });
   return `0x${toHex(deriveEthAddress(toHex(publicKey)))}`;
 }
 function signedTextForReceipt(receipt, responseHashField) {
