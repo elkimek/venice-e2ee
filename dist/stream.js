@@ -5,6 +5,10 @@ import { decryptChunk } from './crypto.js';
  * `choices[0].delta.content` holding an encrypted hex string (or plaintext
  * for whitespace tokens).
  *
+ * A malformed event or a stream that ends without `data: [DONE]` throws, so a
+ * visibly truncated response is not mistaken for a complete one. This does not
+ * detect whole events dropped, reordered or replayed by a relay.
+ *
  * Usage:
  *   const response = await fetch(url, { ... });
  *   for await (const text of decryptSSEStream(response.body, session.privateKey)) {
@@ -18,11 +22,10 @@ export async function* decryptSSEStream(body, privateKey, allowPlaintextResponse
     try {
         while (true) {
             const { done, value } = await reader.read();
-            if (done)
-                break;
-            buffer += decoder.decode(value, { stream: true });
+            buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
             const lines = buffer.split('\n');
-            buffer = lines.pop();
+            // At EOF the remainder is the final line, not the start of a later one.
+            buffer = done ? '' : lines.pop();
             for (const line of lines) {
                 if (!line.startsWith('data: '))
                     continue;
@@ -34,7 +37,7 @@ export async function* decryptSSEStream(body, privateKey, allowPlaintextResponse
                     event = JSON.parse(data);
                 }
                 catch {
-                    continue; // skip malformed events
+                    throw new Error('Venice stream contained a malformed event; the response is incomplete');
                 }
                 const content = event.choices?.[0]?.delta?.content;
                 if (content === undefined || content === null)
@@ -49,35 +52,10 @@ export async function* decryptSSEStream(body, privateKey, allowPlaintextResponse
                     throw e;
                 }
             }
+            if (done)
+                break;
         }
-        // Process any remaining buffer
-        if (buffer.trim()) {
-            if (buffer.startsWith('data: ')) {
-                const data = buffer.slice(6).trim();
-                if (data !== '[DONE]') {
-                    let event;
-                    try {
-                        event = JSON.parse(data);
-                    }
-                    catch {
-                        // ignore trailing partial JSON
-                        event = {};
-                    }
-                    const content = event.choices?.[0]?.delta?.content;
-                    if (content !== undefined && content !== null) {
-                        try {
-                            yield await decryptChunk(privateKey, content, allowPlaintextResponses);
-                        }
-                        catch (e) {
-                            if (e instanceof DOMException && e.name === 'OperationError') {
-                                throw new Error('E2EE decryption failed — session may be stale. Clear the session and retry.');
-                            }
-                            throw e;
-                        }
-                    }
-                }
-            }
-        }
+        throw new Error('Venice stream ended without [DONE]; the response is truncated');
     }
     finally {
         reader.releaseLock();
