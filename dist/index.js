@@ -157,6 +157,6 @@ export { verifyReceipt, receiptSigningBytes, recoverReceiptSigner, jcsStringify,
 export { ACI_ATTESTATION_PATH, ACI_KEYSET_ENDORSEMENT_PURPOSE, ACI_REPORT_DATA_PURPOSE, aciKeysetEndorsementPayload, aciReportData, aciReportDataStatement, establishAciTrustAnchor, fetchAciAttestation, generateAciNonce, verifyAciAttestation, verifyRelayedAciAttestation, } from './aci.js';
 export { ACI_SESSIONS_PATH, computeAttestedSessionId, decodeSessionEvidence, fetchAttestedSession, verifyAttestedSession, } from './session.js';
 export { generateKeypair, deriveAESKey, encryptMessage, decryptChunk, toHex, fromHex, } from './crypto.js';
-export { decryptSSEStream } from './stream.js';
+export { decryptSSEStream, VeniceStreamError } from './stream.js';
 export { buildToolSystemPrompt, renderToolMessages, parseToolCalls, generateToolCallId, flattenMessageContent, ToolCallStreamParser, TOOL_CALL_OPEN, TOOL_CALL_CLOSE, TOOL_RESPONSE_OPEN, TOOL_RESPONSE_CLOSE, } from './tools.js';
 //# sourceMappingURL=index.js.map
