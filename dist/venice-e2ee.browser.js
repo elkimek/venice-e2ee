@@ -651,6 +651,23 @@ async function decryptChunk(clientPrivateKey, hexString, allowPlaintext = false)
 }
 
 // src/stream.ts
+var VeniceStreamError = class extends Error {
+  /** Venice's error code, e.g. `stream_inactivity_timeout`, when provided. */
+  code;
+  /** Venice's error type, e.g. `api_error`, when provided. */
+  type;
+  /** The `error` value exactly as received. */
+  error;
+  constructor(error) {
+    const obj = error && typeof error === "object" ? error : {};
+    const message = typeof obj.message === "string" && obj.message ? obj.message : typeof error === "string" && error ? error : "unknown error";
+    super(`Venice stream reported an error: ${message}`);
+    this.name = "VeniceStreamError";
+    this.code = typeof obj.code === "string" || typeof obj.code === "number" ? obj.code : null;
+    this.type = typeof obj.type === "string" ? obj.type : null;
+    this.error = error;
+  }
+};
 async function* decryptSSEStream(body, privateKey, allowPlaintextResponses = false) {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -670,6 +687,9 @@ async function* decryptSSEStream(body, privateKey, allowPlaintextResponses = fal
           event = JSON.parse(data);
         } catch {
           throw new Error("Venice stream contained a malformed event; the response is incomplete");
+        }
+        if (event.error !== void 0 && event.error !== null) {
+          throw new VeniceStreamError(event.error);
         }
         const content = event.choices?.[0]?.delta?.content;
         if (content === void 0 || content === null) continue;
@@ -3211,6 +3231,7 @@ export {
   TOOL_RESPONSE_CLOSE,
   TOOL_RESPONSE_OPEN,
   ToolCallStreamParser,
+  VeniceStreamError,
   aciKeysetEndorsementPayload,
   aciReportData,
   aciReportDataStatement,

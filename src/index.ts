@@ -311,7 +311,7 @@ export {
   toHex,
   fromHex,
 } from './crypto.js';
-export { decryptSSEStream } from './stream.js';
+export { decryptSSEStream, VeniceStreamError } from './stream.js';
 export {
   buildToolSystemPrompt,
   renderToolMessages,
