@@ -2,13 +2,18 @@
 
 This changelog summarizes user-visible changes to `venice-e2ee`. It also calls out the privacy and verification limits that matter when deciding whether to use a release.
 
-## Unreleased
+## 0.5.5 — 2026-11-03
 
 ### In-band stream errors are surfaced
 
 - `decryptStream()` and `decryptSSEStream()` now throw a `VeniceStreamError` when Venice sends a `data: {"error": ...}` event. Previously the event was skipped because it carries no `choices`, so a response that failed after the HTTP 200 — most visibly `stream_inactivity_timeout` when the model stops producing tokens — looked like an empty or shortened answer, or failed later with an unrelated truncation message if `[DONE]` was absent.
 - `VeniceStreamError` is exported and carries Venice's `code` and `type` when present, plus the raw `error` value, so callers can tell a retryable upstream timeout from other failures. These fields are Venice's plaintext error metadata, not model output.
 - Text already yielded before the error is not withdrawn, as with the other stream failures.
+
+### Development dependency security updates
+
+- Updated Vitest and `@vitest/mocker` to 4.1.12 and Vite to 8.3.5, clearing the current mock-registration, redirect-allowlist, development-server file-access, and editor-launch advisories. The minimum Vitest development dependency now requires the patched 4.1.12 release.
+- These are development-tool updates; the runtime cryptographic dependencies and attestation policies are unchanged. The default installation continues to exclude the optional Phala DCAP peer and its separately documented dependency advisory.
 
 ## 0.5.4 — 2026-10-13
 
