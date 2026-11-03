@@ -6,8 +6,10 @@ import { decryptChunk } from './crypto.js';
  * for whitespace tokens).
  *
  * A malformed event or a stream that ends without `data: [DONE]` throws, so a
- * visibly truncated response is not mistaken for a complete one. This does not
- * detect whole events dropped, reordered or replayed by a relay.
+ * visibly truncated response is not mistaken for a complete one. An in-band
+ * `data: {"error": ...}` event throws a {@link VeniceStreamError} carrying the
+ * error Venice reported. This does not detect whole events dropped, reordered
+ * or replayed by a relay.
  *
  * Usage:
  *   const response = await fetch(url, { ... });
@@ -15,6 +17,36 @@ import { decryptChunk } from './crypto.js';
  *     process.stdout.write(text);
  *   }
  */
+/**
+ * An error Venice reported inside a stream that had already started, as a
+ * `data: {"error": {...}}` event — for example `stream_inactivity_timeout` once
+ * the upstream model stops producing tokens. The HTTP status is 200 by then, so
+ * this event is the only signal that the response did not complete.
+ *
+ * The fields are Venice's own plaintext error metadata, not model output.
+ */
+export class VeniceStreamError extends Error {
+    /** Venice's error code, e.g. `stream_inactivity_timeout`, when provided. */
+    code;
+    /** Venice's error type, e.g. `api_error`, when provided. */
+    type;
+    /** The `error` value exactly as received. */
+    error;
+    constructor(error) {
+        const obj = error && typeof error === 'object' ? error : {};
+        const message = typeof obj.message === 'string' && obj.message
+            ? obj.message
+            : typeof error === 'string' && error
+                ? error
+                : 'unknown error';
+        super(`Venice stream reported an error: ${message}`);
+        this.name = 'VeniceStreamError';
+        this.code =
+            typeof obj.code === 'string' || typeof obj.code === 'number' ? obj.code : null;
+        this.type = typeof obj.type === 'string' ? obj.type : null;
+        this.error = error;
+    }
+}
 export async function* decryptSSEStream(body, privateKey, allowPlaintextResponses = false) {
     const reader = body.getReader();
     const decoder = new TextDecoder();
@@ -38,6 +70,11 @@ export async function* decryptSSEStream(body, privateKey, allowPlaintextResponse
                 }
                 catch {
                     throw new Error('Venice stream contained a malformed event; the response is incomplete');
+                }
+                // Venice reports failures after the 200 status as an in-band event. Skipping
+                // it made a failed response indistinguishable from an empty one until EOF.
+                if (event.error !== undefined && event.error !== null) {
+                    throw new VeniceStreamError(event.error);
                 }
                 const content = event.choices?.[0]?.delta?.content;
                 if (content === undefined || content === null)

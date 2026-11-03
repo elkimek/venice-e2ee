@@ -4,7 +4,7 @@ import {
   deriveAESKey,
   encryptMessage,
 } from './crypto.js';
-import { decryptSSEStream } from './stream.js';
+import { decryptSSEStream, VeniceStreamError } from './stream.js';
 
 function createSSEStream(events: string[]): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
@@ -268,5 +268,83 @@ describe('decryptSSEStream', () => {
     await expect(
       collect(createSSEStream([event, '[DONE]']), client.privateKey)
     ).rejects.toThrow('E2EE decryption failed');
+  });
+  it('throws VeniceStreamError on an in-band error event after partial output', async () => {
+    const client = generateKeypair();
+    const cipherHex = await encryptForStream('partial', client.privateKey, client.pubKeyHex);
+    // Shape observed live from Venice on an E2EE model after 120s without tokens.
+    const error = {
+      message: 'Streaming request timed out after 120 seconds of inactivity.',
+      type: 'api_error',
+      code: 'stream_inactivity_timeout',
+      param: null,
+    };
+    const events = [
+      JSON.stringify({ choices: [{ delta: { content: cipherHex } }] }),
+      JSON.stringify({ error }),
+      '[DONE]',
+    ];
+
+    const chunks: string[] = [];
+    let thrown: unknown;
+    try {
+      for await (const chunk of decryptSSEStream(createSSEStream(events), client.privateKey)) {
+        chunks.push(chunk);
+      }
+    } catch (e) {
+      thrown = e;
+    }
+
+    expect(chunks).toEqual(['partial']);
+    expect(thrown).toBeInstanceOf(VeniceStreamError);
+    const err = thrown as VeniceStreamError;
+    expect(err.message).toBe(
+      'Venice stream reported an error: Streaming request timed out after 120 seconds of inactivity.'
+    );
+    expect(err.code).toBe('stream_inactivity_timeout');
+    expect(err.type).toBe('api_error');
+    expect(err.error).toEqual(error);
+  });
+
+  it('throws on an error event even when [DONE] follows immediately', async () => {
+    const client = generateKeypair();
+    const events = [JSON.stringify({ error: { message: 'upstream failed' } }), '[DONE]'];
+
+    await expect(collect(createSSEStream(events), client.privateKey)).rejects.toThrow(
+      'Venice stream reported an error: upstream failed'
+    );
+  });
+
+  it('throws on an error event split across reads', async () => {
+    const client = generateKeypair();
+    const events = [JSON.stringify({ error: { message: 'split', code: 503 } }), '[DONE]'];
+
+    await expect(collect(createChunkedSSEStream(events), client.privateKey)).rejects.toMatchObject({
+      name: 'VeniceStreamError',
+      code: 503,
+      type: null,
+    });
+  });
+
+  it('reports a string or shapeless error value', async () => {
+    const client = generateKeypair();
+
+    await expect(
+      collect(createSSEStream([JSON.stringify({ error: 'rate limited' }), '[DONE]']), client.privateKey)
+    ).rejects.toThrow('Venice stream reported an error: rate limited');
+    await expect(
+      collect(createSSEStream([JSON.stringify({ error: {} }), '[DONE]']), client.privateKey)
+    ).rejects.toThrow('Venice stream reported an error: unknown error');
+  });
+
+  it('ignores a null error field', async () => {
+    const client = generateKeypair();
+    const cipherHex = await encryptForStream('ok', client.privateKey, client.pubKeyHex);
+    const events = [
+      JSON.stringify({ error: null, choices: [{ delta: { content: cipherHex } }] }),
+      '[DONE]',
+    ];
+
+    expect(await collect(createSSEStream(events), client.privateKey)).toEqual(['ok']);
   });
 });

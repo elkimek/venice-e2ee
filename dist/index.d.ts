@@ -27,7 +27,7 @@ export { ACI_SESSIONS_PATH, computeAttestedSessionId, decodeSessionEvidence, fet
 export type { AciChannelBinding, AciClaim, AttestedSession, AttestedSessionResult, VerifyAttestedSessionOptions, } from './session.js';
 export type { Receipt, ReceiptEvent, ReceiptCheck, ReceiptVerification, SignatureResponse, WorkloadKeyset, WorkloadIdentity, WorkloadPublicKey, KeysetKey, ReceiptTrustAnchor, ReceiptBody, ReceiptResponseHashField, VerifyReceiptOptions, } from './receipt.js';
 export { generateKeypair, deriveAESKey, encryptMessage, decryptChunk, toHex, fromHex, } from './crypto.js';
-export { decryptSSEStream } from './stream.js';
+export { decryptSSEStream, VeniceStreamError } from './stream.js';
 export { buildToolSystemPrompt, renderToolMessages, parseToolCalls, generateToolCallId, flattenMessageContent, ToolCallStreamParser, TOOL_CALL_OPEN, TOOL_CALL_CLOSE, TOOL_RESPONSE_OPEN, TOOL_RESPONSE_CLOSE, } from './tools.js';
 export type { ToolDefinition, ToolFunctionDefinition, ToolCall, ToolChoice, ToolChatMessage, ContentPart, ParseResult, ToolParserOptions, } from './tools.js';
 //# sourceMappingURL=index.d.ts.map
